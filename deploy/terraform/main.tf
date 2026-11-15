@@ -7,6 +7,12 @@ provider "google" {
   region  = var.region
 }
 
+# GKE Sandbox (sandbox_config) is only exposed by the beta provider.
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}
+
 data "google_client_config" "current" {}
 
 resource "google_container_cluster" "main" {
@@ -51,6 +57,7 @@ resource "google_container_node_pool" "system" {
 }
 
 resource "google_container_node_pool" "sandbox" {
+  provider = google-beta
   name     = "sandbox"
   cluster  = google_container_cluster.main.id
   location = var.region

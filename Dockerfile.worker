@@ -14,12 +14,20 @@ COPY packages/analysis/package.json packages/analysis/
 COPY packages/runner/package.json packages/runner/
 RUN npm ci --no-audit --no-fund --omit=dev -w @causalci/worker -w @causalci/runner -w @causalci/analysis -w @causalci/shared
 
-FROM bitnami/kubectl:1.31.4 AS kubectl
+# Official kubectl release binary, verified against the checksum published next to it.
+FROM debian:bookworm-slim AS kubectl
+ARG KUBECTL_VERSION=v1.31.4
+ARG TARGETARCH=amd64
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+ && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl.sha256")  /usr/local/bin/kubectl" | sha256sum -c - \
+ && chmod +x /usr/local/bin/kubectl
+
 FROM docker:27.5-cli AS dockercli
 
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tini && rm -rf /var/lib/apt/lists/*
-COPY --from=kubectl /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
+COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
 # Docker CLI only for docker-compose development (SANDBOX=docker); Kubernetes uses kubectl.
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /app
