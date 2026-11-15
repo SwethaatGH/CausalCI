@@ -1,0 +1,245 @@
+{
+  "generatedAt": "2026-11-15T07:07:15.178Z",
+  "window": 20,
+  "repos": [
+    "sindresorhus/ky@3541888",
+    "axios/axios@4ee8d46f",
+    "expressjs/express@43fca52d"
+  ],
+  "summaries": [
+    {
+      "repo": "ky",
+      "cases": 23,
+      "skipped": 54,
+      "window": 20,
+      "metrics": {
+        "heuristic": {
+          "top1": 0.30434782608695654,
+          "top3": 0.43478260869565216,
+          "top5": 0.4782608695652174,
+          "mrr": 0.4236311748779779
+        },
+        "learned": {
+          "top1": 0.21739130434782608,
+          "top3": 0.6956521739130435,
+          "top5": 0.782608695652174,
+          "mrr": 0.4678414580588494
+        },
+        "recency": {
+          "top1": 0,
+          "top3": 0.13043478260869565,
+          "top5": 0.30434782608695654,
+          "mrr": 0.14906634547905248
+        },
+        "size": {
+          "top1": 0.391304347826087,
+          "top3": 0.6086956521739131,
+          "top5": 0.7391304347826086,
+          "mrr": 0.5455588493631972
+        },
+        "random": {
+          "top1": 0.05000000000000002,
+          "top3": 0.14999999999999994,
+          "top5": 0.25,
+          "mrr": 0.1798869828571842
+        }
+      }
+    },
+    {
+      "repo": "axios",
+      "cases": 25,
+      "skipped": 67,
+      "window": 20,
+      "metrics": {
+        "heuristic": {
+          "top1": 0.36,
+          "top3": 0.48,
+          "top5": 0.52,
+          "mrr": 0.4705790116316432
+        },
+        "learned": {
+          "top1": 0.4,
+          "top3": 0.64,
+          "top5": 0.8,
+          "mrr": 0.5585714285714286
+        },
+        "recency": {
+          "top1": 0.2,
+          "top3": 0.48,
+          "top5": 0.56,
+          "mrr": 0.36974873080136234
+        },
+        "size": {
+          "top1": 0.24,
+          "top3": 0.44,
+          "top5": 0.56,
+          "mrr": 0.398265639589169
+        },
+        "random": {
+          "top1": 0.05000000000000002,
+          "top3": 0.14999999999999994,
+          "top5": 0.25,
+          "mrr": 0.17988698285718419
+        }
+      }
+    },
+    {
+      "repo": "express",
+      "cases": 28,
+      "skipped": 57,
+      "window": 20,
+      "metrics": {
+        "heuristic": {
+          "top1": 0.07142857142857142,
+          "top3": 0.25,
+          "top5": 0.39285714285714285,
+          "mrr": 0.24343110204454738
+        },
+        "learned": {
+          "top1": 0.21428571428571427,
+          "top3": 0.6071428571428571,
+          "top5": 0.75,
+          "mrr": 0.4348098330241187
+        },
+        "recency": {
+          "top1": 0.5357142857142857,
+          "top3": 0.6785714285714286,
+          "top5": 0.7142857142857143,
+          "mrr": 0.6387447024264251
+        },
+        "size": {
+          "top1": 0.10714285714285714,
+          "top3": 0.35714285714285715,
+          "top5": 0.5357142857142857,
+          "mrr": 0.2997244323137181
+        },
+        "random": {
+          "top1": 0.050000000000000024,
+          "top3": 0.14999999999999997,
+          "top5": 0.25,
+          "mrr": 0.17988698285718413
+        }
+      }
+    },
+    {
+      "repo": "all (3 repos)",
+      "cases": 76,
+      "skipped": 178,
+      "window": 20,
+      "metrics": {
+        "heuristic": {
+          "top1": 0.23684210526315788,
+          "top3": 0.3815789473684211,
+          "top5": 0.4605263157894737,
+          "mrr": 0.3726850417135775
+        },
+        "learned": {
+          "top1": 0.27631578947368424,
+          "top3": 0.6447368421052632,
+          "top5": 0.7763157894736842,
+          "mrr": 0.4855172970304548
+        },
+        "recency": {
+          "top1": 0.2631578947368421,
+          "top3": 0.4473684210526316,
+          "top5": 0.5394736842105263,
+          "mrr": 0.4020670511051601
+        },
+        "size": {
+          "top1": 0.23684210526315788,
+          "top3": 0.4605263157894737,
+          "top5": 0.6052631578947368,
+          "mrr": 0.4065365609193007
+        },
+        "random": {
+          "top1": 0.049999999999999926,
+          "top3": 0.15000000000000022,
+          "top5": 0.25,
+          "mrr": 0.17988698285718396
+        }
+      }
+    }
+  ],
+  "weights": [
+    {
+      "feature": "bias",
+      "weight": -1.871
+    },
+    {
+      "feature": "recency (1 = newest in window)",
+      "weight": 1.475
+    },
+    {
+      "feature": "log churn",
+      "weight": 1.066
+    },
+    {
+      "feature": "docs only",
+      "weight": -1.045
+    },
+    {
+      "feature": "signal: import-change",
+      "weight": 0.986
+    },
+    {
+      "feature": "signal: dependency-manifest",
+      "weight": -0.95
+    },
+    {
+      "feature": "log files",
+      "weight": 0.674
+    },
+    {
+      "feature": "signal: missing-tests",
+      "weight": 0.521
+    },
+    {
+      "feature": "signal: test-modified",
+      "weight": 0.493
+    },
+    {
+      "feature": "signal: control-flow",
+      "weight": 0.442
+    },
+    {
+      "feature": "signal: large-diff",
+      "weight": 0.432
+    },
+    {
+      "feature": "signal: configuration",
+      "weight": 0.299
+    },
+    {
+      "feature": "heuristic score",
+      "weight": 0.161
+    },
+    {
+      "feature": "signal: critical-path",
+      "weight": 0.092
+    },
+    {
+      "feature": "signal: error-handling",
+      "weight": -0.07
+    },
+    {
+      "feature": "signal: removed-validation",
+      "weight": -0.011
+    },
+    {
+      "feature": "tests only",
+      "weight": -0.002
+    },
+    {
+      "feature": "signal: function-modified",
+      "weight": 0
+    },
+    {
+      "feature": "signal: high-fan-in",
+      "weight": 0
+    },
+    {
+      "feature": "signal: symptom-match",
+      "weight": 0
+    }
+  ]
+}

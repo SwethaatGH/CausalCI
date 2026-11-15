@@ -1,0 +1,22 @@
+{
+  "name": "@causalci/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "causalci": "src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@causalci/analysis": "0.1.0",
+    "@causalci/runner": "0.1.0",
+    "@causalci/shared": "0.1.0",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5"
+  }
+}

@@ -1,0 +1,47 @@
+{{- if and .Values.sandbox.createRuntimeClass .Values.sandbox.runtimeClassName }}
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ .Values.sandbox.runtimeClassName }}
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+handler: runsc
+---
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+# Sandbox pods: no inbound traffic at all; outbound only DNS and HTTPS (git clone and the package
+# registry in the init containers). Plain NetworkPolicy cannot match domain names; on Cilium,
+# replace the 443 rule with a toFQDNs allowlist (github.com, registry.npmjs.org).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: sandbox }
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            # Never the cluster or cloud metadata networks.
+            except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"]
+      ports: [{ protocol: TCP, port: 443 }]
+---
+# Redis is reachable only from the API and the workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: redis }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchExpressions: [{ key: app.kubernetes.io/component, operator: In, values: [api, worker] }] }
+      ports: [{ protocol: TCP, port: 6379 }]
+{{- end }}

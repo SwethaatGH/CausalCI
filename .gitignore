@@ -1,0 +1,34 @@
+# Dependencies and build output
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+**/terraform.tfvars
+
+# Local tooling and pitch materials (not part of the project)
+.claude/
+.impeccable/
+PRODUCT.md
+demo/pitch/
+context.txt
+
+# Local artifacts
+*.causalci-labels.json
+*.log
+.DS_Store

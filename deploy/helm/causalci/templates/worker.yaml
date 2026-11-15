@@ -1,0 +1,80 @@
+# The worker never runs repository code: it creates one sandbox Job per test run. Its
+# ServiceAccount can manage Jobs and read their pods and logs in this namespace, nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-worker }
+subjects: [{ kind: ServiceAccount, name: {{ .Release.Name }}-worker }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.keda.enabled }}
+  replicas: {{ .Values.worker.replicas }}
+  {{- end }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
+  template:
+    metadata:
+      labels: {{- include "causalci.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: {{ .Release.Name }}-worker
+      # A running bisect finishes before the pod exits (SIGTERM drains the loop).
+      terminationGracePeriodSeconds: {{ add .Values.sandbox.timeoutSeconds 120 }}
+      securityContext: { fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: "{{ .Values.image.worker }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: metrics, containerPort: 9464 }]
+          env:
+            - { name: REDIS_URL, value: "{{ include "causalci.redisUrl" . }}" }
+            - { name: SANDBOX, value: kubernetes }
+            - { name: SANDBOX_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: SANDBOX_RUNTIME, value: "{{ .Values.sandbox.runtimeClassName }}" }
+            - { name: SANDBOX_IMAGE, value: "{{ .Values.sandbox.image }}" }
+            - { name: RUN_TIMEOUT_MS, value: "{{ mul .Values.sandbox.timeoutSeconds 1000 }}" }
+            - { name: STALE_JOB_MS, value: "{{ .Values.worker.staleJobMs }}" }
+            - { name: CACHE_DIR, value: /cache }
+          readinessProbe: { httpGet: { path: /readyz, port: metrics }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: metrics }, periodSeconds: 20 }
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext: {{- include "causalci.restricted" . | nindent 12 }}
+          volumeMounts:
+            - { name: cache, mountPath: /cache }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: cache
+          emptyDir: { sizeLimit: {{ .Values.worker.cacheSize }} }
+        - name: tmp
+          emptyDir: {}

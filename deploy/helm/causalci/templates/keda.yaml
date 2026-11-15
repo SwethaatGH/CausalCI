@@ -1,0 +1,20 @@
+{{- if .Values.keda.enabled }}
+# Scales workers on the Redis list of pending bisect jobs, down to zero when idle.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "causalci.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: { name: {{ .Release.Name }}-worker }
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ include "causalci.redisUrl" . | trimPrefix "redis://" | quote }}
+        listName: causalci:jobs:pending
+        listLength: "{{ .Values.keda.jobsPerWorker }}"
+{{- end }}

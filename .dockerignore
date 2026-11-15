@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.env
+*.db
+*.db-*
+coverage
+*.tsbuildinfo
+context.txt
+.claude
+.impeccable
+deploy/terraform/.terraform

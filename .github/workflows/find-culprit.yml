@@ -1,0 +1,65 @@
+# When CI goes red on main, bisect between the last green and the first red commit inside
+# Docker sandboxes and report the culprit on the commit. Optionally opens a draft revert PR.
+name: Find culprit
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write        # only used by the optional revert branch
+  pull-requests: write
+  actions: read
+
+jobs:
+  bisect:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BAD: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - name: Find the last green commit on main
+        id: range
+        run: |
+          GOOD=$(gh run list --workflow CI --branch main --status success --limit 1 --json headSha --jq '.[0].headSha')
+          if [ -z "$GOOD" ] || ! git merge-base --is-ancestor "$GOOD" "$BAD"; then
+            echo "No green ancestor of $BAD found; nothing to bisect." && exit 0
+          fi
+          echo "good=$GOOD" >> "$GITHUB_OUTPUT"
+
+      - name: Bisect in Docker sandboxes
+        if: steps.range.outputs.good != ''
+        run: |
+          npx tsx apps/cli/src/index.ts bisect \
+            --good "${{ steps.range.outputs.good }}" --bad "$BAD" \
+            --test "${{ vars.CAUSALCI_TEST_COMMAND || 'npm test' }}" \
+            --strategy bayesian --parallel 2 --sandbox docker \
+            --markdown culprit.md --json > culprit.json
+          cat culprit.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report on the culprit commit
+        if: steps.range.outputs.good != ''
+        run: |
+          CULPRIT=$(node -p 'require("./culprit.json").culprit.sha')
+          gh api "repos/${{ github.repository }}/commits/$CULPRIT/comments" -F body=@culprit.md
+
+      - name: Open a draft revert PR
+        if: steps.range.outputs.good != '' && vars.CAUSALCI_OPEN_REVERT_PR == 'true'
+        run: |
+          CULPRIT=$(node -p 'require("./culprit.json").culprit.sha')
+          git config user.name "causalci[bot]"
+          git config user.email "causalci-bot@users.noreply.github.com"
+          git switch -c "causalci/revert-${CULPRIT:0:7}"
+          git revert --no-edit "$CULPRIT"
+          git push origin HEAD
+          gh pr create --draft --title "Revert ${CULPRIT:0:7} (found by CausalCI)" --body-file culprit.md

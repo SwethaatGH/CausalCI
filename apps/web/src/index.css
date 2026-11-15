@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+/* Black and white, Apple system type. Red / yellow / green appear only where colour means something
+   (failure, warning, pass). Token names are kept from the previous theme so every component picks
+   up the new palette; "cyan" and "bio" now mean the foreground accent (ink), not a hue. */
+@theme {
+  --color-obsidian: #ffffff;   /* page */
+  --color-lab: #fbfbfd;        /* chrome: sidebar, header */
+  --color-panel: #ffffff;      /* cards */
+  --color-panel-2: #f5f5f7;    /* subtle fills, hover, selected */
+  --color-line: #e8e8ed;
+  --color-line-2: #d2d2d7;
+
+  --color-bio: #1d1d1f;
+  --color-cyan: #1d1d1f;
+  --color-teal: #6e6e73;
+
+  --color-healthy: #1a7f37;
+  --color-warn: #9a6700;
+  --color-crit: #d1242f;
+  --color-unknown: #6e6e73;
+
+  --color-ink: #1d1d1f;
+  --color-ink-2: #424245;
+  --color-ink-3: #6e6e73;
+
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, monospace;
+
+  --animate-pulse-ring: pulse-ring 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-scan: scan 1.6s linear infinite;
+  --animate-dash: dash 1.2s linear infinite;
+}
+
+/* Follows the Mac appearance setting. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-obsidian: #000000;
+    --color-lab: #0b0b0c;
+    --color-panel: #161617;
+    --color-panel-2: #232325;
+    --color-line: #2c2c2e;
+    --color-line-2: #3a3a3c;
+    --color-bio: #f5f5f7;
+    --color-cyan: #f5f5f7;
+    --color-teal: #a1a1a6;
+    --color-healthy: #3fb950;
+    --color-warn: #d29922;
+    --color-crit: #f85149;
+    --color-unknown: #98989d;
+    --color-ink: #f5f5f7;
+    --color-ink-2: #c7c7cc;
+    --color-ink-3: #98989d;
+  }
+}
+
+@keyframes pulse-ring {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+@keyframes scan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+@keyframes dash {
+  to { stroke-dashoffset: -20; }
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-obsidian);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 0;
+}
+
+h1, h2, h3 { text-wrap: balance; letter-spacing: -0.015em; }
+.tabular, code, kbd { font-variant-numeric: tabular-nums; }
+
+.lab-grid { background-color: var(--color-obsidian); }
+
+/* Cards: a hairline and a soft, offset shadow; no glass, no glow. */
+.glass {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px -8px rgba(0, 0, 0, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  .glass { box-shadow: none; }
+}
+
+/* Emphasis rings for the one card on a page that needs it (e.g. the first bad commit). */
+.glow-bio, .glow-cyan { border-color: var(--color-ink) !important; }
+.glow-crit { border-color: color-mix(in srgb, var(--color-crit) 55%, transparent) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-crit) 10%, transparent); }
+
+/* Kept for existing markup; the accent is now plain ink. */
+.text-gradient { color: var(--color-ink); }
+
+::selection { background: color-mix(in srgb, var(--color-ink) 16%, transparent); }
+input[type=range] { accent-color: var(--color-ink); }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--color-line-2); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* React Flow theming */
+.react-flow { --xy-background-color: transparent; --xy-edge-stroke-default: var(--color-line-2); }
+.react-flow__controls { box-shadow: none !important; border: 1px solid var(--color-line); border-radius: 10px; overflow: hidden; }
+.react-flow__controls-button { background: var(--color-panel) !important; border-bottom: 1px solid var(--color-line) !important; fill: var(--color-ink-2) !important; color: var(--color-ink-2) !important; }
+.react-flow__controls-button:hover { background: var(--color-panel-2) !important; }
+.react-flow__minimap { background: var(--color-lab) !important; border: 1px solid var(--color-line); border-radius: 10px; }
+.react-flow__attribution { display: none; }
+.react-flow__edge.animated path { animation-duration: 0.9s; }
+
+/* Markdown (Gemma responses) */
+.prose-lab { line-height: 1.6; color: var(--color-ink); }
+.prose-lab p { margin: 0.4em 0; }
+.prose-lab ul, .prose-lab ol { padding-left: 1.3em; margin: 0.4em 0; }
+.prose-lab ul { list-style: disc; }
+.prose-lab ol { list-style: decimal; }
+.prose-lab code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-panel-2); padding: 0.1em 0.35em; border-radius: 4px; color: var(--color-ink); }
+.prose-lab pre { background: var(--color-obsidian); border: 1px solid var(--color-line); border-radius: 10px; padding: 0.8em 1em; overflow-x: auto; margin: 0.6em 0; }
+.prose-lab pre code { background: none; padding: 0; color: var(--color-ink); }
+.prose-lab h1, .prose-lab h2, .prose-lab h3 { font-family: var(--font-display); font-weight: 600; margin: 0.8em 0 0.3em; }
+.prose-lab a { color: var(--color-ink); text-decoration: underline; text-underline-offset: 0.2em; }
+.prose-lab table { border-collapse: collapse; margin: 0.5em 0; }
+.prose-lab th, .prose-lab td { border: 1px solid var(--color-line); padding: 0.25em 0.6em; }
+
+/* Reduced motion: honored from the OS setting and the in-app preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media print {
+  body { background: #fff !important; color: #111 !important; }
+  .no-print { display: none !important; }
+  .print-area { color: #111 !important; }
+  .print-area * { color: #111 !important; background: transparent !important; border-color: #ccc !important; box-shadow: none !important; }
+  .glass { backdrop-filter: none; }
+}

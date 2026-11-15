@@ -1,0 +1,59 @@
+image:
+  api: ghcr.io/swethaatgh/causalci-api
+  worker: ghcr.io/swethaatgh/causalci-worker
+  tag: latest
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 1          # SQLite on a ReadWriteOnce volume: one writer
+  port: 8787
+  publicDemo: false
+  bisectJobsEnabled: true
+  # Name of an existing Secret with optional keys GEMINI_API_KEY, GITHUB_TOKEN, JOBS_TOKEN.
+  secretName: causalci-secrets
+  storage: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+worker:
+  replicas: 1          # ignored when keda.enabled
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  cacheSize: 10Gi
+  staleJobMs: 7200000
+
+sandbox:
+  image: node:22-bookworm-slim
+  # RuntimeClass for test pods. "gvisor" needs nodes with runsc installed (GKE Sandbox, or the
+  # containerd shim on self-managed nodes). Empty runs with the default runtime.
+  runtimeClassName: gvisor
+  createRuntimeClass: true
+  timeoutSeconds: 600
+  cpus: 2
+  memoryMb: 2048
+
+redis:
+  # Bundled single-node Redis. Set enabled=false and url=... to use a managed instance.
+  enabled: true
+  url: ""
+  image: redis:7.4-alpine
+
+keda:
+  enabled: true
+  minReplicas: 0
+  maxReplicas: 10
+  jobsPerWorker: 1
+
+networkPolicy:
+  enabled: true
+
+ingress:
+  enabled: false
+  className: nginx
+  host: causalci.example.com
+  tls: false
+
+serviceMonitor:
+  enabled: false
