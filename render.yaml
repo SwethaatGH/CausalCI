@@ -7,14 +7,12 @@ services:
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build
-    startCommand: npm start
+    # The heap cap applies only to the running server (free instances have 512 MB); the build needs more.
+    startCommand: NODE_OPTIONS=--max-old-space-size=384 npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Free instances have 512 MB; a capped heap makes Node collect garbage before the limit is reached.
-      - key: NODE_OPTIONS
-        value: --max-old-space-size=384
       - key: HOST
         value: 0.0.0.0
       - key: WEB_DIST_PATH
