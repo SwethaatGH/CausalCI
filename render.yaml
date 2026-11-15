@@ -12,6 +12,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Free instances have 512 MB; a capped heap makes Node collect garbage before the limit is reached.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: HOST
         value: 0.0.0.0
       - key: WEB_DIST_PATH
@@ -21,6 +24,10 @@ services:
       # No GEMINI_API_KEY: the demo uses its labeled PRERECORDED analysis.
       - key: AI_PROVIDER
         value: gemini
-      # Optional: a read-only token lifts GitHub imports from 60 to 5,000 requests/hour (shared by all visitors).
+      # Imports read history from a local git clone (no rate limit). Optional: a read-only token
+      # raises the API limit used for repository details from 60 to 5,000 requests/hour.
       - key: GITHUB_TOKEN
+        sync: false
+      # Optional: live Gemma for visitors' "Ask AI" (every request counts against your quota).
+      - key: GEMINI_API_KEY
         sync: false
