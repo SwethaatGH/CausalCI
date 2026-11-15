@@ -5,6 +5,8 @@ import type { Redis } from "ioredis";
 import type { Strategy } from "./hunt";
 
 export interface BisectJobInput {
+  /** "bisect" finds the first failing commit in (good, bad]; "verify" runs the tests at `bad` with `patch` applied. */
+  kind?: "bisect" | "verify";
   repoUrl: string;
   good: string;
   bad: string;
@@ -12,6 +14,19 @@ export interface BisectJobInput {
   installCommand?: string;
   strategy?: Strategy;
   parallel?: number;
+  patch?: string;
+  /** Links the job back to an investigation (and a proposed fix) so results update them. */
+  investigationId?: string;
+  patchId?: string;
+}
+
+export interface VerifyResult {
+  kind: "verify";
+  sha: string;
+  verdict: "pass" | "fail";
+  timedOut: boolean;
+  durationMs: number;
+  logTail: string;
 }
 
 export type JobState = "queued" | "running" | "succeeded" | "failed";

@@ -3,6 +3,7 @@ import type {
   AnalysisResult,
   CodeFunction,
   Commit,
+  DependencyGraph,
   Investigation,
   InvestigationProgress,
   PipelineStage,
@@ -18,7 +19,11 @@ import {
   computeHealth,
   fileFanIn,
   isIgnoredForGraph,
+  functionsOf,
+  initPolyglot,
+  isGraphConfigPath,
   isJsTs,
+  polyglotLanguage,
   isSourcePath,
   parseModule,
   rankSuspects,
@@ -174,17 +179,20 @@ export async function runInvestigation(db: DB, id: string, opts: { demoPacingMs?
     // ── Parse changed JS/TS files at each commit (AST) ──
     const functionsByCommit = new Map<string, Map<string, CodeFunction[]>>();
     await stage("parse", async () => {
+      await initPolyglot();
       let parsed = 0;
       let failed = 0;
       for (const c of commits) {
         const map = new Map<string, CodeFunction[]>();
-        const targets = c.files.filter((f) => isJsTs(f.path) && f.status !== "removed" && !f.binary).slice(0, env.maxParseFilesPerCommit);
-        if (c.files.filter((f) => isJsTs(f.path)).length > targets.length) log("warn", `${c.shortSha}: parsed ${targets.length} JS/TS files (limit ${env.maxParseFilesPerCommit}).`);
+        const parseable = (p: string) => isJsTs(p) || !!polyglotLanguage(p);
+        const targets = c.files.filter((f) => parseable(f.path) && f.status !== "removed" && !f.binary).slice(0, env.maxParseFilesPerCommit);
+        if (c.files.filter((f) => parseable(f.path)).length > targets.length) log("warn", `${c.shortSha}: parsed ${targets.length} source files (limit ${env.maxParseFilesPerCommit}).`);
         await mapLimit(targets, 4, async (f) => {
           try {
             const content = await source.getFile(f.path, c.sha);
             if (content === null) return;
-            const pm = parseModule(f.path, content);
+            const pm = functionsOf(f.path, content, parseModule);
+            if (!pm) return;
             if (pm.parseError) log("warn", `${c.shortSha} ${f.path}: ${pm.parseError}`);
             map.set(f.path, pm.functions);
             parsed++;
@@ -212,13 +220,14 @@ export async function runInvestigation(db: DB, id: string, opts: { demoPacingMs?
       const changed = new Set(commits.flatMap((c) => c.files.map((f) => f.path)));
       const candidates = tree.paths.filter((pth) => isSourcePath(pth) && !isIgnoredForGraph(pth));
       // Prioritize changed files, then JS/TS/Python, then everything else.
-      candidates.sort((a, b) => Number(changed.has(b)) - Number(changed.has(a)) || Number(isJsTs(b) || b.endsWith(".py")) - Number(isJsTs(a) || a.endsWith(".py")) || a.localeCompare(b));
+      const analyzable = (p: string) => isJsTs(p) || !!polyglotLanguage(p);
+      candidates.sort((a, b) => Number(changed.has(b)) - Number(changed.has(a)) || Number(analyzable(b)) - Number(analyzable(a)) || a.localeCompare(b));
       const selected = candidates.slice(0, env.maxGraphFiles);
       const skipped = candidates.slice(env.maxGraphFiles).map((path) => ({ path, reason: `Beyond graph limit of ${env.maxGraphFiles} files` }));
       if (skipped.length) log("warn", `${skipped.length} source file(s) beyond the ${env.maxGraphFiles}-file graph limit were skipped.`);
       const files: SourceFile[] = [];
       await mapLimit(selected, 6, async (path) => {
-        if (!(isJsTs(path) || path.endsWith(".py"))) {
+        if (!analyzable(path)) {
           files.push({ path, content: "" }); // node only; no relationships inferred
           return;
         }
@@ -231,7 +240,14 @@ export async function runInvestigation(db: DB, id: string, opts: { demoPacingMs?
         }
       }, signal);
       files.sort((a, b) => a.path.localeCompare(b.path));
-      return { ...buildDependencyGraph(files, { headSha, skipped }), treePaths: tree.paths };
+      // Config files the resolvers need: tsconfig paths/baseUrl, workspace package.json files, go.mod.
+      const configs: SourceFile[] = [];
+      await mapLimit(tree.paths.filter(isGraphConfigPath).slice(0, 60), 6, async (path) => {
+        const content = await source.getFile(path, headSha).catch(() => null);
+        if (content !== null) configs.push({ path, content });
+      }, signal);
+      await initPolyglot();
+      return { ...buildDependencyGraph(files, { headSha, skipped, configs }), treePaths: tree.paths };
     }, (r) => (r ? `${r.graph.nodes.length} nodes · ${r.graph.edges.length} edges` : "Skipped"));
 
     // ── Risk ──
@@ -287,4 +303,52 @@ export async function runInvestigation(db: DB, id: string, opts: { demoPacingMs?
     emit();
     progressBus.emit(id, { type: "done", status: inv.status, error: inv.error } satisfies ProgressEvent);
   }
+}
+
+const atCommitInFlight = new Map<string, Promise<DependencyGraph | null>>();
+
+/**
+ * The dependency graph as it was at `sha`: the same file set as the head graph, read at that commit
+ * (files that did not exist yet drop out, files deleted later come back). Commits are immutable,
+ * so the result is cached permanently.
+ */
+export async function graphAtCommit(db: DB, inv: Investigation, analysis: AnalysisResult, sha: string): Promise<DependencyGraph | null> {
+  const head = analysis.graph;
+  if (!head) return null;
+  if (head.headSha === sha) return head;
+  const key = `graph-at:${inv.id}:${sha}`;
+  const hit = db.cacheGet<DependencyGraph>(key);
+  if (hit) return hit;
+  const pending = atCommitInFlight.get(key);
+  if (pending) return pending;
+  const job = (async () => {
+    const source = sourceFor(db, inv.repositoryId);
+    const idx = analysis.commits.findIndex((c) => c.sha === sha);
+    const removedLater = idx > 0 ? analysis.commits.slice(0, idx).flatMap((c) => c.files.filter((f) => f.status === "removed").map((f) => f.path)) : [];
+    const paths = [...new Set([...head.nodes.filter((n) => n.kind === "file" && n.filePath).map((n) => n.filePath!), ...removedLater])];
+    const files: SourceFile[] = [];
+    const skipped: { path: string; reason: string }[] = [];
+    const never = new AbortController().signal;
+    await mapLimit(paths, 8, async (path) => {
+      try {
+        const content = await source.getFile(path, sha);
+        if (content !== null) files.push({ path, content });
+      } catch (err) {
+        skipped.push({ path, reason: (err as Error).message });
+      }
+    }, never);
+    const tree = await source.getTree(sha).catch(() => ({ paths: [] as string[], truncated: false }));
+    const configs: SourceFile[] = [];
+    await mapLimit(tree.paths.filter(isGraphConfigPath).slice(0, 60), 6, async (path) => {
+      const content = await source.getFile(path, sha).catch(() => null);
+      if (content !== null) configs.push({ path, content });
+    }, never);
+    await initPolyglot();
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    const { graph } = buildDependencyGraph(files, { headSha: sha, skipped, configs });
+    db.cacheSet(key, graph, null);
+    return graph;
+  })().finally(() => atCommitInFlight.delete(key));
+  atCommitInFlight.set(key, job);
+  return job;
 }

@@ -4,7 +4,7 @@
 // introducer lands. Baselines put the numbers in context; a learned ranker is scored with
 // leave-one-repository-out cross-validation so it is never tested on a repo it trained on.
 import { basename } from "node:path";
-import { assessCommit, commitFeatures, rankUnder, trainRanker, type LinearModel, type RankingGroup } from "@causalci/analysis";
+import { assessCommit, commitFeatures, mulberry32, rankUnder, trainRanker, type LinearModel, type RankingGroup } from "@causalci/analysis";
 import type { Commit } from "@causalci/shared";
 import { loadCommit, recentCommits } from "./git";
 import type { RegressionLabel } from "./szz";
@@ -24,6 +24,8 @@ export interface Metrics {
   top3: number;
   top5: number;
   mrr: number;
+  /** 95% bootstrap confidence intervals (1,000 resamples of the cases, seeded). */
+  ci?: { top3: [number, number]; mrr: [number, number] };
 }
 
 export interface EvalSummary {
@@ -42,7 +44,29 @@ const harmonic = (n: number) => {
 };
 
 function metricsFromRanks(ranks: number[]): Metrics {
-  return { top1: avg(ranks.map((k) => +(k <= 1))), top3: avg(ranks.map((k) => +(k <= 3))), top5: avg(ranks.map((k) => +(k <= 5))), mrr: avg(ranks.map((k) => 1 / k)) };
+  const base = { top1: avg(ranks.map((k) => +(k <= 1))), top3: avg(ranks.map((k) => +(k <= 3))), top5: avg(ranks.map((k) => +(k <= 5))), mrr: avg(ranks.map((k) => 1 / k)) };
+  return { ...base, ci: bootstrapCI(ranks) };
+}
+
+/** Percentile bootstrap: resample the cases with replacement and read the 2.5th / 97.5th percentiles. */
+export function bootstrapCI(ranks: number[], resamples = 1000, seed = 7): { top3: [number, number]; mrr: [number, number] } {
+  if (ranks.length === 0) return { top3: [0, 0], mrr: [0, 0] };
+  const rnd = mulberry32(seed);
+  const top3: number[] = [];
+  const mrr: number[] = [];
+  for (let r = 0; r < resamples; r++) {
+    let t = 0;
+    let m = 0;
+    for (let i = 0; i < ranks.length; i++) {
+      const k = ranks[Math.floor(rnd() * ranks.length)];
+      t += +(k <= 3);
+      m += 1 / k;
+    }
+    top3.push(t / ranks.length);
+    mrr.push(m / ranks.length);
+  }
+  const pct = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+  return { top3: [pct(top3, 0.025), pct(top3, 0.975)], mrr: [pct(mrr, 0.025), pct(mrr, 0.975)] };
 }
 
 /** Exact expectation for a uniformly random order (not a sampled run). */
@@ -118,11 +142,11 @@ export function crossValidateLearned(byRepo: { repo: string; cases: EvalCase[] }
 
 export function evalToMarkdown(summaries: EvalSummary[]): string {
   const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
-  const out = ["| Repository | Cases | Ranker | Top-1 | Top-3 | Top-5 | MRR |", "|---|---:|---|---:|---:|---:|---:|"];
+  const out = ["| Repository | Cases | Ranker | Top-1 | Top-3 (95% CI) | Top-5 | MRR |", "|---|---:|---|---:|---:|---:|---:|"];
   for (const s of summaries)
     for (const r of RANKERS) {
       const m = s.metrics[r];
-      if (m) out.push(`| ${s.repo} | ${s.cases} | ${r} | ${pct(m.top1)} | ${pct(m.top3)} | ${pct(m.top5)} | ${m.mrr.toFixed(3)} |`);
+      if (m) out.push(`| ${s.repo} | ${s.cases} | ${r} | ${pct(m.top1)} | ${pct(m.top3)}${m.ci ? ` (${pct(m.ci.top3[0])}–${pct(m.ci.top3[1])})` : ""} | ${pct(m.top5)} | ${m.mrr.toFixed(3)} |`);
     }
   return out.join("\n");
 }

@@ -43,6 +43,7 @@ export type CreateInvestigationInput = z.input<typeof createInvestigationSchema>
 
 export const updateInvestigationSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  dismissedSuspects: z.array(z.string().regex(/^[0-9a-f]{7,40}$/i)).max(200).optional(),
   selectedCommitSha: z.string().nullable().optional(),
   knownGoodSha: z.string().nullable().optional(),
   knownBadSha: z.string().nullable().optional(),
@@ -136,3 +137,11 @@ export const aiPatchOutputSchema = z.object({
   proposedContent: z.string().min(1),
 });
 export type AIPatchOutput = z.infer<typeof aiPatchOutputSchema>;
+
+/** Run the repository's own tests in sandboxes to find the first failing commit of an investigation. */
+export const confirmWithTestsSchema = z.object({
+  testCommand: z.string().trim().min(1).max(500).default("npm test"),
+  installCommand: z.string().trim().min(1).max(500).optional(),
+  strategy: z.enum(["binary", "k-ary", "bayesian"]).default("bayesian"),
+  parallel: z.number().int().min(1).max(8).default(1),
+});

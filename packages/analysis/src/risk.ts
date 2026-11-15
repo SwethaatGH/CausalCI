@@ -143,6 +143,11 @@ export function assessCommit(commit: Commit, ctx: CommitAnalysisContext = {}): R
   };
 
   const files = commit.files.slice(0, MAX_FILES_PER_COMMIT);
+  // Lines added anywhere in the commit: a guard removed from one file and re-added in another was
+  // moved (a refactor), not dropped. Without this, extract-to-module refactors look like regressions.
+  const commitAdded = files.flatMap((f) =>
+    f.patch && !f.binary ? parsePatch(f.patch).flatMap((h) => h.lines.filter((l) => l.type === "add").map((l) => ({ path: f.path, t: tokens(l.content) }))) : [],
+  );
   if (commit.files.length > MAX_FILES_PER_COMMIT)
     skippedFiles.push({ path: "*", reason: `Only the first ${MAX_FILES_PER_COMMIT} of ${commit.files.length} files were analyzed` });
 
@@ -198,8 +203,11 @@ export function assessCommit(commit: Commit, ctx: CommitAnalysisContext = {}): R
         const line = l.type === "add" ? l.newLine : l.oldLine;
         const loc = l.type === "add" ? "added" : "removed";
         if (isSrc && l.type === "del" && VALIDATION_RE.test(text) && !addedSet.has(norm(text)) && norm(text).length > 3) {
+          const movedTo = hasCounterpart(text, addedTokens) ? null : commitAdded.find((x) => x.path !== f.path && hasCounterpart(text, [x.t]))?.path;
           if (hasCounterpart(text, addedTokens)) {
             rewrittenEv.push(ev({ kind: "diff-line", filePath: f.path, line, snippet: text.trim().slice(0, 200), description: "Guard-like line rewritten (most of its logic reappears in added lines)" }));
+          } else if (movedTo) {
+            rewrittenEv.push(ev({ kind: "diff-line", filePath: f.path, line, snippet: text.trim().slice(0, 200), description: `Guard-like line moved to ${movedTo} in the same commit` }));
           } else validationEv.push(ev({ kind: "diff-line", filePath: f.path, line, snippet: text.trim().slice(0, 200), description: `Removed guard-like line (old line ${line})` }));
         }
         if (isSrc && existing && ERROR_RE.test(text) && !hasCounterpart(text, l.type === "add" ? removedTokens : addedTokens)) {

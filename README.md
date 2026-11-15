@@ -2,7 +2,7 @@
 
 **When CI goes red, CausalCI proves which commit caused it.** It ranks the suspects with a model trained on real regressions, re-runs the repository's own tests in isolated sandboxes with a flaky-aware search, and reports the culprit with its confidence and the evidence.
 
-[![CI](https://github.com/SwethaatGH/CausalCI/actions/workflows/ci.yml/badge.svg)](https://github.com/SwethaatGH/CausalCI/actions/workflows/ci.yml)
+[![CI](https://github.com/SwethaatGH/CausalCI/workflows/CI/badge.svg)](https://github.com/SwethaatGH/CausalCI/actions/workflows/ci.yml)
 
 Import a GitHub repository and CausalCI:
 
@@ -19,7 +19,7 @@ The UI explains suspects. The engine underneath **runs the repository's own test
 
 | | Result |
 |---|---|
-| **Learned suspect ranker** (76 real regressions mined with SZZ + reverts from ky, axios and express; leave-one-repo-out) | culprit in the top 3 **64.5%** of the time vs. 44.7% for the best baseline and 15% for random ([details](docs/EVALUATION.md#1-ranking-on-real-regressions)) |
+| **Learned suspect ranker** (184 real regressions mined with SZZ + reverts from 9 repositories in JavaScript, Python and Go; leave-one-repo-out) | culprit in the top 3 **65.8%** of the time (95% CI 58.7–72.8%) vs. 49.5% (42.4–56.5%) for the best baseline and 15% for random ([details](docs/EVALUATION.md#1-ranking-on-real-regressions)) |
 | **Flaky-aware Bayesian bisection** (simulated suite with 5% false failures, 10% misses) | right **97.9%** of the time vs. 61.0% for `git bisect` ([details](docs/EVALUATION.md#2-search-under-flaky-tests-simulated)) |
 | **Parallel k-way bisection** | wall-clock rounds 6 → 3 at 64 commits, 9 → 4 at 512 |
 
@@ -27,8 +27,8 @@ How it works:
 
 1. **Range.** A red CI run on `main` (GitHub Action), a metric shift lined up with a deploy (change-point detection, `causalci signal`), or a range you give it.
 2. **Rank.** A logistic-regression ranker trained on mined regressions orders the commits; the transparent risk signals explain each one.
-3. **Search.** Bayesian bisection seeded with the ranking tests where the expected information gain is highest and stops at 95% confidence; k-way mode runs probes in parallel. Regression test selection over the AST call graph can narrow what each run executes.
-4. **Sandbox.** Each run happens in a fresh read-only worktree with no network, no capabilities, a non-root user, resource limits and optional gVisor. Dependencies are installed once per lockfile hash. In production every run is a hardened Kubernetes Job on a gVisor node pool ([threat model](docs/THREAT_MODEL.md)).
+3. **Search.** Bayesian bisection seeded with the ranking tests where the expected information gain is highest and stops at 95% confidence; k-way mode runs probes in parallel. Regression test selection over the call graph can narrow what each run executes.
+4. **Sandbox.** Each run happens on a fresh checkout with no network, no capabilities, a non-root user, resource limits and optional gVisor. Dependencies (including workspace `node_modules`) are installed once per manifest-and-lockfile hash. In production every run is a hardened Kubernetes Job on a gVisor node pool ([threat model](docs/THREAT_MODEL.md)). The web app starts these runs too: **Confirm with tests** on Suspects, **Run the checks** on Fix and verify.
 5. **Report.** Culprit, confidence, every run's result, a comment on the culprit commit, and an optional draft revert PR.
 
 It runs as a CLI (`causalci`), a queue-driven service (API → Redis → KEDA-autoscaled workers, Prometheus and Grafana), and an **MCP server**, so coding agents can check their own changes. Design decisions are recorded in [docs/adr](docs/adr).
@@ -59,7 +59,7 @@ It runs as a CLI (`causalci`), a queue-driven service (API → Redis → KEDA-au
 - Every finding cites its evidence: commit, file, line and code.
 - Gemma's output is validated before it reaches the screen. Evidence the model invents is removed and flagged.
 - When Gemma isn't connected, demo answers are labeled **prerecorded**. They are never passed off as live.
-- The web app never runs imported code. Its checks run only on the demo, in an isolated `vm` context; real test runs happen only in the sandboxes below.
+- The web app process never runs imported code. Demo checks run in an isolated `vm` context; a real repository's tests run only in the sandboxes below, and only when the server enables them.
 - A proposed fix is **unverified** until it passes. Nothing is ever pushed to your repository.
 
 ---
@@ -107,7 +107,10 @@ See [`.env.example`](.env.example). All secrets stay on the backend.
 |---|---|---|
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | API server |
 | `DATABASE_PATH` | `./causalci.db` | SQLite file (relative to repo root) |
-| `GITHUB_TOKEN` | — | Raises GitHub limit from 60 to 5,000 req/h |
+| `IMPORT_MODE` | `auto` | `git`: read history from a local partial clone (no rate limit, nothing truncated); `api`: GitHub REST API; `auto`: git when available |
+| `CACHE_DIR` | `./.causalci-cache` | Where repository mirrors are kept |
+| `GITHUB_TOKEN` | — | API mode: raises the GitHub limit from 60 to 5,000 requests/hour (git mode doesn't need it) |
+| `BISECT_JOBS_ENABLED` | `false` | Let the server run repositories' tests in sandboxes (Confirm with tests, Run the checks); needs Docker or a worker |
 | `AI_PROVIDER` | `ollama` | `ollama` or `gemini` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
 | `OLLAMA_MODEL` | `gemma4` | Any installed Gemma 4 tag |
@@ -164,10 +167,11 @@ causalci/
 │   └── mcp/        MCP server for coding agents: rank_suspects · select_tests · find_culprit
 ├── packages/
 │   ├── shared/     Domain types, Zod schemas (requests + AI output), terminology
-│   ├── analysis/   Diff and AST parsing, dependency graph, risk signals, learned ranker,
-│   │               binary / k-way / Bayesian bisection, test selection, change-point detection, benchmark
-│   └── runner/     Git adapter, Docker / Kubernetes / local sandboxes, culprit hunt, SZZ mining,
-│                   evaluation harness, Redis reliable queue
+│   ├── analysis/   Diff parsing; TypeScript type-checked resolution; Python / Go / Java via tree-sitter;
+│   │               dependency graph, risk signals, learned ranker, binary / k-way / Bayesian bisection,
+│   │               test selection, change-point detection, benchmark
+│   └── runner/     Git adapter and partial-clone mirror, Docker / Kubernetes / local sandboxes, culprit hunt,
+│                   SZZ mining, evaluation harness with bootstrap CIs, Redis reliable queue
 ├── deploy/         Helm chart (KEDA, gVisor RuntimeClass, NetworkPolicies), Terraform (GKE + GKE Sandbox),
 │                   Argo CD app, Prometheus + Grafana
 ├── .github/        CI, find-culprit-on-red-main, signed image releases
@@ -186,34 +190,34 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · API: [docs/API.md](docs
 npm test
 ```
 
-91 tests across the workspaces:
+112 tests across the workspaces:
 
-- **`packages/analysis`, 55 tests:** URL parsing, diff and AST parsing, import resolution, risk scoring, ranking, the dependency graph, impact, evidence traceability, reports and patches; plus binary, k-way and Bayesian bisection (exhaustive over every culprit position), information gain and posterior updates, priors, the flaky-suite accuracy gap, the learned ranker, test selection and change-point detection.
-- **`packages/runner`, 17 tests:** against real temporary git repositories. Ranges, patch parsing and ref validation; the end-to-end culprit hunt with all three strategies; SZZ and revert mining; the evaluation harness; the sandbox isolation contract (Docker flags and Kubernetes pod security); and the job queue.
-- **`apps/api`, 13 integration tests:** import, investigations, end-to-end analysis, impact, comparison, the prerecorded fallback, AI output validation with **mocked inference**, fixes and their checks, reports, saved-investigation actions, bisect jobs refused unless enabled, and Prometheus metrics.
+- **`packages/analysis`, 67 tests:** diff and AST parsing, import resolution, risk scoring, ranking, the dependency graph, impact, evidence traceability, reports and patches; **type-checked JS/TS resolution** (path aliases, workspace packages, method calls, callbacks, interface dispatch); **Python, Go and Java** functions, imports and calls; binary, k-way and Bayesian bisection, the learned ranker, test selection and change-point detection.
+- **`packages/runner`, 22 tests:** against real temporary git repositories. The culprit hunt with all three strategies; the **partial-clone mirror** (history, untruncated diffs, files, full tree); SZZ and revert mining; the evaluation harness; the sandbox isolation contract; the **workspace dependency cache** (the real install and test scripts); lockfile-based install commands; and **applying a proposed fix** before a run.
+- **`apps/api`, 17 integration tests:** import, investigations, analysis, impact, comparison, the prerecorded fallback, AI output validation with **mocked inference**, fixes, reports, saved-investigation actions, sandboxed jobs (refused unless enabled, results written back as *confirmed by tests*), dismissed suspects and Prometheus metrics.
 - **`apps/web`, 6 tests:** navigation, the repository form, the demo, shareable URL state, compare selection and the commit drawer.
 
 ---
 
-## Known limitations
+## Scope and edges
 
-- Function-level analysis covers **JS/TS** (TypeScript compiler AST). Python imports are regex-detected at file level. Other languages appear as graph nodes without edges.
-- Only relative imports are resolved. Path aliases, dynamic dispatch, callbacks and instance-method calls are not.
-- The dependency graph reflects the latest analyzed commit, not each historical state.
-- GitHub may truncate very large diffs and trees. Affected files are reported as skipped.
-- Unauthenticated GitHub access is limited to 60 requests/hour. Set `GITHUB_TOKEN` for real use.
-- The web app's checks run only on the demo; it never runs imported code. Real test execution happens only through sandboxed bisect jobs, the CLI or the MCP server.
-- The dependency cache covers a root `node_modules`; workspaces with nested `node_modules` reinstall per run.
-- The ranker evaluation covers three JavaScript repositories (76 cases). See the threats to validity in [docs/EVALUATION.md](docs/EVALUATION.md).
-- Pattern-based signals can flag innocent commits; the demo includes one on purpose.
+What CausalCI covers, and where it deliberately stops:
+
+- **Languages.** Function-level analysis for JS/TS (TypeScript compiler) and Python, Go and Java (tree-sitter). Other languages appear as files without relationships; nothing is invented.
+- **Resolution.** JS/TS imports and calls are resolved by the TypeScript type checker: path aliases and `baseUrl`, workspace packages, method calls on typed instances, functions passed as callbacks, and calls through interfaces and overrides. Calls through `any`, computed `obj[name]()` and code outside the repository can't be followed. In Python, Go and Java, calls on untyped instances are linked only when the method name is unique, and labeled as a name match.
+- **History.** The impact map uses the graph as it was at the selected commit, rebuilt from that commit's files and cached.
+- **GitHub limits.** By default history comes from a local partial clone: no rate limit, and diffs and file trees are never truncated. In API mode, unchanged metadata is revalidated with ETags (not counted against the limit), truncated diffs are rebuilt from the raw files, and truncated trees are walked folder by folder.
+- **Running tests.** The web app can run a repository's own tests (Confirm with tests, Run the checks), always in sandboxes and only when the server enables them; public demos keep it off.
+- **Dependency cache.** Installs are cached per hash of every `package.json` and lockfile, and every `node_modules` (root and workspaces) is reused. npm, pnpm and Yarn are detected from the lockfile.
+- **Evaluation.** 184 regressions across 9 repositories and 3 languages, with 95% bootstrap confidence intervals. Labels come from SZZ and reverts, which are noisy; see the threats to validity in [docs/EVALUATION.md](docs/EVALUATION.md).
+- **False positives.** Pattern-based signals are hypotheses, not verdicts. Guards moved to another file in the same commit are recognized as refactors; a suspect can be marked *not the cause*; and **Confirm with tests** replaces the estimate with a test result.
 
 ## Roadmap
 
 - Cilium FQDN egress policies so sandbox pods can reach only the git host and the package registry
 - Postgres instead of SQLite so the API can run more than one replica
-- More repositories (and Python via tree-sitter) in the ranker evaluation
-- Historical dependency graphs per commit; tsconfig path-alias resolution
-- Tree-sitter parsers for Python, Go and Rust function-level analysis
+- Rust, Ruby and C# grammars (tree-sitter), and type information for Python (Pyright) and Go (`go/types`)
+- Ranker evaluation on more repositories and languages
 - Shared team investigations and comments
 
 ## Contributing

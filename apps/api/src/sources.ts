@@ -1,6 +1,7 @@
 import { Octokit } from "@octokit/rest";
 import type { Branch, ChangedFile, Commit, FileStatus, Repository } from "@causalci/shared";
-import { buildDemoHistory, demoFileAt, isBinaryPath } from "@causalci/analysis";
+import { buildDemoHistory, countPatch, createUnifiedPatch, demoFileAt, isBinaryPath, parsePatch } from "@causalci/analysis";
+import { GitMirror } from "@causalci/runner";
 import { env } from "./config";
 import type { DB } from "./db";
 import { ApiError } from "./errors";
@@ -117,6 +118,48 @@ export class GitHubSource implements RepoSource {
     private repo: string,
   ) {}
 
+  private mirrorPromise: Promise<GitMirror | null> | null = null;
+
+  /** The local partial clone, or null in API mode / when git or the clone is unavailable. */
+  private mirror(): Promise<GitMirror | null> {
+    this.mirrorPromise ??= (async () => {
+      if (env.importMode === "api" || !(await GitMirror.available())) return null;
+      const m = new GitMirror(`https://github.com/${this.owner}/${this.repo}.git`, env.cacheDir);
+      try {
+        await m.ready();
+        return m;
+      } catch (err) {
+        if (env.importMode === "git") throw new ApiError(502, "GIT_CLONE_FAILED", `Could not clone ${this.owner}/${this.repo}: ${(err as Error).message}`);
+        return null; // auto mode: fall back to the REST API
+      }
+    })();
+    return this.mirrorPromise;
+  }
+
+  /**
+   * Conditional request: the last response's ETag is sent as If-None-Match; GitHub answers 304
+   * without counting it against the rate limit, and the stored copy is reused.
+   */
+  private async conditional<T>(key: string, ttl: number, what: string, call: (headers: Record<string, string>) => Promise<{ data: T; headers: Record<string, unknown> }>): Promise<T> {
+    const full = `gh:${this.owner}/${this.repo}:${key}`;
+    const fresh = this.db.cacheGet<T>(full);
+    if (fresh !== null) return fresh;
+    const stale = this.db.cacheGet<{ etag: string; data: T }>(`${full}:etag`);
+    try {
+      const r = await call(stale ? { "if-none-match": stale.etag } : {});
+      this.db.cacheSet(full, r.data, ttl);
+      const etag = r.headers.etag;
+      if (typeof etag === "string") this.db.cacheSet(`${full}:etag`, { etag, data: r.data }, null);
+      return r.data;
+    } catch (err) {
+      if ((err as { status?: number }).status === 304 && stale) {
+        this.db.cacheSet(full, stale.data, ttl);
+        return stale.data;
+      }
+      throw translateGitHubError(err, what);
+    }
+  }
+
   private async cached<T>(key: string, ttl: number | null, what: string, fn: () => Promise<T>): Promise<T> {
     const full = `gh:${this.owner}/${this.repo}:${key}`;
     const hit = this.db.cacheGet<T>(full);
@@ -133,7 +176,7 @@ export class GitHubSource implements RepoSource {
 
   getRepository(): Promise<Repository> {
     return this.cached("repo", 10 * 60_000, `${this.owner}/${this.repo}`, async () => {
-      const { data } = await this.gh.repos.get({ owner: this.owner, repo: this.repo });
+      const data = await this.conditional("repo-core", 10 * 60_000, `${this.owner}/${this.repo}`, (headers) => this.gh.repos.get({ owner: this.owner, repo: this.repo, headers }));
       const [languages, contributors, latest] = await Promise.all([
         this.gh.repos.listLanguages({ owner: this.owner, repo: this.repo }).then((r) => r.data as Record<string, number>).catch(() => null),
         this.gh.repos
@@ -167,14 +210,26 @@ export class GitHubSource implements RepoSource {
     });
   }
 
-  listBranches(): Promise<Branch[]> {
-    return this.cached("branches", 5 * 60_000, "branches", async () => {
-      const { data } = await this.gh.repos.listBranches({ owner: this.owner, repo: this.repo, per_page: 100 });
-      return data.map((b) => ({ name: b.name, sha: b.commit.sha, protected: b.protected ?? null }));
-    });
+  async listBranches(): Promise<Branch[]> {
+    const m = await this.mirror();
+    if (m) return m.branches();
+    const data = await this.conditional("branches", 5 * 60_000, "branches", (headers) => this.gh.repos.listBranches({ owner: this.owner, repo: this.repo, per_page: 100, headers }));
+    return data.map((b) => ({ name: b.name, sha: b.commit.sha, protected: b.protected ?? null }));
   }
 
-  listCommits(o: ListCommitsOptions): Promise<Commit[]> {
+  private withUrl(c: Commit): Commit {
+    return { ...c, url: `https://github.com/${this.owner}/${this.repo}/commit/${c.sha}` };
+  }
+
+  async listCommits(o: ListCommitsOptions): Promise<Commit[]> {
+    const m = await this.mirror();
+    if (m) {
+      try {
+        return (await m.log(o.branch, { limit: Math.min(100, o.limit), since: o.since, until: o.until })).map((c) => this.withUrl(c));
+      } catch (err) {
+        throw new ApiError(404, "BRANCH_NOT_FOUND", `Could not read branch ${o.branch}: ${(err as Error).message}`);
+      }
+    }
     return this.cached(`commits:${o.branch}:${o.limit}:${o.since}:${o.until}`, 2 * 60_000, `commits on ${o.branch}`, async () => {
       const { data } = await this.gh.repos.listCommits({
         owner: this.owner,
@@ -188,15 +243,52 @@ export class GitHubSource implements RepoSource {
     });
   }
 
-  getCommit(sha: string): Promise<Commit> {
+  async getCommit(sha: string): Promise<Commit> {
+    const m = await this.mirror();
+    if (m) return this.withUrl(await m.commit(sha)); // complete patches: git never truncates
     // Commits are immutable: cache by full SHA forever.
-    return this.cached(`commit:${sha}`, sha.length === 40 ? null : HOUR, `commit ${sha.slice(0, 7)}`, async () => {
+    const c = await this.cached(`commit:${sha}`, sha.length === 40 ? null : HOUR, `commit ${sha.slice(0, 7)}`, async () => {
       const { data } = await this.gh.repos.getCommit({ owner: this.owner, repo: this.repo, ref: sha });
       return mapCommit(data as GhCommit);
     });
+    return this.repairTruncated(c);
+  }
+
+  /** GitHub omits patches for very large diffs; rebuild them from the file contents before and after. */
+  private async repairTruncated(c: Commit): Promise<Commit> {
+    if (!c.files.some((f) => f.truncated)) return c;
+    const parent = c.parents[0];
+    const files = await Promise.all(
+      c.files.map(async (f) => {
+        if (!f.truncated || f.binary) return f;
+        try {
+          const before = parent && f.status !== "added" ? ((await this.getFile(f.previousPath ?? f.path, parent)) ?? "") : "";
+          const after = f.status === "removed" ? "" : ((await this.getFile(f.path, c.sha)) ?? "");
+          const full = createUnifiedPatch(f.path, before, after);
+          const at = full.indexOf("@@");
+          if (at === -1) return f;
+          const patch = full.slice(at);
+          const { additions, deletions } = countPatch(parsePatch(patch));
+          return { ...f, patch, additions, deletions, truncated: false };
+        } catch {
+          return f; // too large to fetch; stays reported as skipped
+        }
+      }),
+    );
+    return { ...c, files };
   }
 
   async commitsBetween(base: string, head: string, cap: number) {
+    const m = await this.mirror();
+    if (m) {
+      try {
+        const r = await m.between(base, head, cap);
+        return { commits: r.commits.map((c) => this.withUrl(c)), total: r.total };
+      } catch (err) {
+        if ((err as { code?: string }).code === "INVALID_RANGE") throw new ApiError(422, "INVALID_RANGE", "The 'broken' commit is older than the 'working' commit. Swap them.");
+        throw new ApiError(404, "COMMIT_NOT_FOUND", (err as Error).message);
+      }
+    }
     return this.cached(`between:${base}:${head}:${cap}`, HOUR, `${base.slice(0, 7)}...${head.slice(0, 7)}`, async () => {
       const { data } = await this.gh.repos.compareCommitsWithBasehead({ owner: this.owner, repo: this.repo, basehead: `${base}...${head}`, per_page: 100 });
       if (data.status === "behind") throw new ApiError(422, "INVALID_RANGE", "The 'broken' commit is older than the 'working' commit. Swap them.");
@@ -206,6 +298,8 @@ export class GitHubSource implements RepoSource {
   }
 
   async compareFiles(base: string, head: string): Promise<ChangedFile[]> {
+    const m = await this.mirror();
+    if (m) return m.diff(base, head);
     return this.cached(`compare:${base}:${head}`, HOUR, `comparison ${base.slice(0, 7)}...${head.slice(0, 7)}`, async () => {
       const { data } = await this.gh.repos.compareCommitsWithBasehead({ owner: this.owner, repo: this.repo, basehead: `${base}...${head}`, per_page: 1 });
       return mapFiles(data.files as GhFile[]);
@@ -217,6 +311,15 @@ export class GitHubSource implements RepoSource {
     const hit = this.db.cacheGet<{ content: string | null }>(key);
     if (hit) return hit.content;
     if (isBinaryPath(path)) return null;
+    const m = await this.mirror();
+    if (m) {
+      try {
+        return await m.file(path, ref, env.maxFileBytes);
+      } catch (err) {
+        if ((err as { code?: string }).code === "FILE_TOO_LARGE") throw new ApiError(413, "FILE_TOO_LARGE", (err as Error).message);
+        throw new ApiError(502, "GIT_ERROR", `Could not read ${path}@${ref.slice(0, 7)}: ${(err as Error).message}`);
+      }
+    }
     // raw.githubusercontent.com does not consume REST API quota.
     const url = `https://raw.githubusercontent.com/${this.owner}/${this.repo}/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`;
     let res: Response;
@@ -239,11 +342,33 @@ export class GitHubSource implements RepoSource {
     return text;
   }
 
-  getTree(ref: string) {
+  async getTree(ref: string) {
+    const m = await this.mirror();
+    if (m) return m.tree(ref); // never truncated
     return this.cached(`tree:${ref}`, ref.length === 40 ? null : HOUR, `file tree at ${ref.slice(0, 7)}`, async () => {
       const { data } = await this.gh.git.getTree({ owner: this.owner, repo: this.repo, tree_sha: ref, recursive: "1" });
-      return { paths: data.tree.filter((t) => t.type === "blob" && t.path).map((t) => t.path!), truncated: data.truncated };
+      const paths = data.tree.filter((t) => t.type === "blob" && t.path).map((t) => t.path!);
+      if (!data.truncated) return { paths, truncated: false };
+      // The recursive listing hit GitHub's size limit: walk sub-trees one level at a time instead.
+      return this.walkTree(ref, 150);
     });
+  }
+
+  private async walkTree(ref: string, budget: number): Promise<{ paths: string[]; truncated: boolean }> {
+    const paths: string[] = [];
+    const queue: { sha: string; prefix: string }[] = [{ sha: ref, prefix: "" }];
+    let calls = 0;
+    while (queue.length && calls < budget) {
+      const { sha, prefix } = queue.shift()!;
+      calls++;
+      const { data } = await this.gh.git.getTree({ owner: this.owner, repo: this.repo, tree_sha: sha });
+      for (const t of data.tree) {
+        if (!t.path || !t.sha) continue;
+        if (t.type === "blob") paths.push(prefix + t.path);
+        else if (t.type === "tree" && !/^(node_modules|vendor|dist|build|\.git)$/.test(t.path)) queue.push({ sha: t.sha, prefix: `${prefix}${t.path}/` });
+      }
+    }
+    return { paths, truncated: queue.length > 0 };
   }
 }
 

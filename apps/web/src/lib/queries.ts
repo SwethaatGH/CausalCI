@@ -16,6 +16,8 @@ export const qk = {
   reports: (id?: string) => ["reports", id ?? "all"] as const,
   aiStatus: ["ai-status"] as const,
   settings: ["settings"] as const,
+  jobsConfig: ["jobs-config"] as const,
+  testJob: (id: string) => ["test-job", id] as const,
 };
 
 export function useInvestigation(id: string | null) {
@@ -95,4 +97,27 @@ export function useLiveProgress(inv: Investigation | undefined) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, running]);
+}
+
+export function useJobsConfig() {
+  return useQuery({ queryKey: qk.jobsConfig, queryFn: api.jobsConfig, staleTime: 60_000 });
+}
+
+/** Polls a sandboxed test job until it finishes, then refreshes everything its result can change. */
+export function useTestJob(jobId: string | null | undefined, invId: string) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: qk.testJob(jobId ?? "none"),
+    queryFn: () => api.testJob(jobId!),
+    enabled: !!jobId,
+    refetchInterval: (query) => (query.state.data && ["succeeded", "failed"].includes(query.state.data.state) ? false : 2000),
+  });
+  const done = q.data?.state === "succeeded";
+  useEffect(() => {
+    if (!done) return;
+    void qc.invalidateQueries({ queryKey: qk.investigation(invId) });
+    void qc.invalidateQueries({ queryKey: qk.timeline(invId) });
+    void qc.invalidateQueries({ queryKey: qk.patches(invId) });
+  }, [done, invId, qc]);
+  return q;
 }

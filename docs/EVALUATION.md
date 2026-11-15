@@ -30,45 +30,56 @@ The learned ranker is scored with **leave-one-repository-out** cross-validation:
 
 ### Results
 
-Repositories at the commits used: `sindresorhus/ky@3541888`, `axios/axios@4ee8d46f`, `expressjs/express@43fca52d`. 76 labelled regressions fall inside the window (23 + 25 + 28).
+Nine repositories in three languages, at the commits used: `sindresorhus/ky@3541888`, `axios/axios@4ee8d46f`, `expressjs/express@43fca52d`, `koajs/koa@7c6bfe7`, `sindresorhus/got@6b5aafc` (JavaScript/TypeScript); `psf/requests@3c7baaa0`, `pallets/flask@49943b5a` (Python); `spf13/cobra@adbc881`, `gin-gonic/gin@0f09c3a` (Go). **184 labelled regressions** fall inside the window.
 
-**Pooled over all 76 cases**
+Confidence intervals are 95% percentile bootstrap intervals (1,000 seeded resamples of the cases).
 
-| Ranker | Top-1 | Top-3 | Top-5 | MRR |
+**Pooled over all 184 cases**
+
+| Ranker | Top-1 | Top-3 (95% CI) | Top-5 | MRR |
 |---|---:|---:|---:|---:|
-| **learned** | **27.6%** | **64.5%** | **77.6%** | **0.486** |
-| recency | 26.3% | 44.7% | 53.9% | 0.402 |
-| size | 23.7% | 46.1% | 60.5% | 0.407 |
-| heuristic | 23.7% | 38.2% | 46.1% | 0.373 |
+| **learned** | **34.2%** | **65.8% (58.7–72.8%)** | **79.3%** | **0.539** |
+| recency | 27.7% | 49.5% (42.4–56.5%) | 62.5% | 0.436 |
+| size | 23.9% | 46.7% (39.7–53.3%) | 62.0% | 0.411 |
+| heuristic | 20.7% | 38.0% (31.0–45.7%) | 52.7% | 0.361 |
 | random | 5.0% | 15.0% | 25.0% | 0.180 |
 
-**Per repository (learned vs. the best baseline on that repository)**
+The learned ranker's interval does not overlap the best baseline's, so the improvement is not noise.
 
-| Repository | Cases | Learned top-3 | Best baseline top-3 |
-|---|---:|---:|---|
-| ky | 23 | 69.6% | size, 60.9% |
-| axios | 25 | 64.0% | heuristic / recency, 48.0% |
-| express | 28 | 60.7% | recency, 67.9% |
+**Per repository (learned top-3, held out, vs. the best other ranker on that repository)**
 
-The full per-ranker table and the trained weights are in [`eval/results.json`](eval/results.json).
+| Repository | Language | Cases | Learned top-3 (95% CI) | Best other ranker |
+|---|---|---:|---:|---|
+| ky | TS | 23 | 69.6% (47.8–87.0%) | size, 60.9% |
+| axios | JS | 25 | 64.0% (44.0–80.0%) | recency, 48.0% |
+| express | JS | 28 | 71.4% (53.6–89.3%) | recency, 67.9% |
+| koa | JS | 27 | 66.7% (48.1–85.2%) | recency, 59.3% |
+| got | TS | 14 | 42.9% (21.4–71.4%) | size, 42.9% |
+| requests | Python | 22 | 63.6% (45.5–81.8%) | heuristic, 59.1% |
+| flask | Python | 15 | 86.7% (66.7–100%) | recency, 80.0% |
+| cobra | Go | 20 | 60.0% (35.0–80.0%) | size, 45.0% |
+| gin | Go | 10 | 60.0% (30.0–90.0%) | recency, 70.0% |
+
+The full per-ranker table is in [`eval/results.md`](eval/results.md); the trained weights are in [`eval/results.json`](eval/results.json).
 
 ### What this shows
 
-- The hand-tuned heuristic beats random but loses to simple baselines on two of three repositories. Learning the weights from mined data fixes that: the learned ranker is the best on every pooled metric and on top-3 in two of three held-out repositories.
-- The largest learned weights are recency (+1.48), churn (+1.07), docs-only (−1.05), import changes (+0.99) and dependency-manifest changes (−0.95). Regressions cluster in recent, larger code changes, and lockfile bumps are rarely the culprit in these projects.
-- The shipped model (`packages/analysis/src/ranker-model.ts`) is trained on all 76 cases. It orders `causalci rank` and seeds the Bayesian search; the heuristic signals stay as the human-readable explanation of each suspect.
+- The hand-tuned heuristic beats random but loses to simple baselines. Learning the weights from mined data fixes that: the learned ranker is best on every pooled metric, and best or tied on top-3 in 8 of 9 held-out repositories (gin, with 10 cases, is the exception).
+- It transfers across languages: each held-out Python or Go repository is ranked by a model trained mostly on other languages' history (for example, 6 of the 8 training repositories are JavaScript when cobra is held out), because the signals it relies on (recency, churn, docs-only changes) describe how projects change, not language syntax.
+- The largest learned weights: recency (+1.78), churn (+1.26), docs-only (−0.98), number of files (+0.74), large diffs (+0.60) and dependency-manifest changes (−0.58).
+- The shipped model (`packages/analysis/src/ranker-model.ts`) is trained on all 184 cases. It orders suspects and seeds the Bayesian search; the transparent signals remain the explanation.
 
 ### Threats to validity
 
 - SZZ labels are noisy: refactors, or fixes that only add code, produce wrong or missing introducers. Reverts are cleaner but rarer.
-- Three JavaScript repositories and 76 cases is a small sample. Confidence intervals are wide, so read differences of a few points as ties.
-- The 20-commit window is a modelling choice; most mined introducers are older and are skipped (178 of 254 labels).
+- Nine repositories is still a modest sample; per-repository intervals are wide, so read small per-repository differences as ties. The pooled intervals are what support the headline claim.
+- The 20-commit window is a modelling choice; most mined introducers are older and are skipped (462 of 646 labels).
 
 ### Reproduce
 
 ```bash
-git clone https://github.com/sindresorhus/ky && git clone https://github.com/axios/axios && git clone https://github.com/expressjs/express
-npx tsx apps/cli/src/index.ts eval --repo ky --repo axios --repo express --max-fixes 120 --window 20 --out results.json
+for r in sindresorhus/ky axios/axios expressjs/express koajs/koa sindresorhus/got psf/requests pallets/flask spf13/cobra gin-gonic/gin; do git clone https://github.com/$r; done
+npx tsx apps/cli/src/index.ts eval --repo ky --repo axios --repo express --repo koa --repo got --repo requests --repo flask --repo cobra --repo gin --max-fixes 120 --window 20 --out results.json
 ```
 
 Mined labels are cached next to each clone (`<repo>.causalci-labels.json`), so later runs skip mining.

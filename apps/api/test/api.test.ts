@@ -3,7 +3,8 @@ import type { AIAnalysis, Investigation, InvestigationReport, PatchSuggestion } 
 import { buildApp } from "../src/app";
 import { openDatabase } from "../src/db";
 import { invalidateAIStatus } from "../src/ai/provider";
-import { defaultSettings } from "../src/config";
+import { defaultSettings, env } from "../src/config";
+import { MemoryQueue } from "@causalci/runner";
 
 let ctx: Awaited<ReturnType<typeof buildApp>>;
 const realFetch = globalThis.fetch;
@@ -186,5 +187,67 @@ describe("sandboxed bisect jobs and metrics", () => {
     expect(r.headers["content-type"]).toMatch(/text\/plain/);
     expect(r.body).toContain("causalci_http_request_duration_seconds_bucket");
     expect(r.body).toMatch(/causalci_bisect_queue_depth 0/);
+  });
+});
+
+describe("confirming suspects with sandboxed tests", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  const queue = new MemoryQueue();
+  let invId = "";
+  let sixth = "";
+  beforeAll(async () => {
+    app = await buildApp({ db: openDatabase(":memory:"), demoPacingMs: 0, queue });
+    // Enable jobs after the app is built so no inline worker starts; this test plays the worker.
+    env.bisectJobsEnabled = true;
+    const launched = (await app.app.inject({ method: "POST", url: "/api/demo/launch" })).json() as Investigation;
+    for (let i = 0; i < 100 && app.db.getInvestigation(launched.id)?.status !== "completed"; i++) await new Promise((r) => setTimeout(r, 20));
+    // Treat the analyzed demo as an imported repository so the sandbox path applies.
+    const inv = app.db.getInvestigation(launched.id)!;
+    const analysis = app.db.getAnalysis(launched.id)!;
+    const real: Investigation = { ...inv, id: "inv_real", isDemo: false, repositoryId: "acme/shop", knownGoodSha: analysis.commits[analysis.commits.length - 1].sha, knownBadSha: null, findings: inv.findings.map((f) => ({ ...f, status: f.status === "test-confirmed" ? "suspected" : f.status })) };
+    app.db.saveInvestigation(real);
+    app.db.saveAnalysis({ ...analysis, investigationId: "inv_real", bisect: null });
+    invId = real.id;
+    sixth = analysis.commits.find((c) => c.message.startsWith("Refactor discount stacking"))!.sha;
+  });
+  afterAll(async () => {
+    env.bisectJobsEnabled = false;
+    await app.app.close();
+  });
+
+  it("queues a culprit search over the investigation's range", async () => {
+    const r = await app.app.inject({ method: "POST", url: `/api/investigations/${invId}/confirm`, payload: { testCommand: "npm test" } });
+    expect(r.statusCode).toBe(202);
+    const job = r.json();
+    expect(job.input).toMatchObject({ kind: "bisect", repoUrl: "https://github.com/acme/shop.git", testCommand: "npm test", investigationId: invId });
+    expect(app.db.getInvestigation(invId)!.testJobId).toBe(job.id);
+  });
+
+  it("applies a finished search back to the investigation: the culprit becomes confirmed by tests", async () => {
+    const job = (await queue.claim(1))!;
+    await queue.complete(job.id, { kind: "bisect", culprit: { sha: sixth, shortSha: sixth.slice(0, 7), title: "Refactor" }, confidence: 0.98, runs: 4, rounds: 4, heuristicRank: 1, testRuns: [{ sha: sixth, verdict: "fail" }] });
+    const r = await app.app.inject({ method: "GET", url: `/api/bisect-jobs/${job.id}` });
+    expect(r.json().state).toBe("succeeded");
+    const inv = app.db.getInvestigation(invId)!;
+    expect(inv.findings[0].commitSha).toBe(sixth);
+    expect(inv.findings[0].status).toBe("test-confirmed");
+    expect(inv.knownBadSha).toBe(sixth);
+    expect(app.db.getAnalysis(invId)!.bisect?.firstBadSha).toBe(sixth);
+  });
+
+  it("refuses the demo (it has built-in checks) and reports why jobs are unavailable when off", async () => {
+    const demo = app.db.listInvestigations().find((i) => i.isDemo)!;
+    expect((await app.app.inject({ method: "POST", url: `/api/investigations/${demo.id}/confirm`, payload: {} })).statusCode).toBe(422);
+    env.bisectJobsEnabled = false;
+    const cfg = (await app.app.inject({ method: "GET", url: "/api/bisect-jobs/config" })).json();
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.reason).toMatch(/BISECT_JOBS_ENABLED/);
+    env.bisectJobsEnabled = true;
+  });
+
+  it("remembers suspects marked as not the cause", async () => {
+    const r = await app.app.inject({ method: "PATCH", url: `/api/investigations/${invId}`, payload: { dismissedSuspects: [sixth.slice(0, 12)] } });
+    expect(r.json().dismissedSuspects).toEqual([sixth.slice(0, 12)]);
+    expect((await app.app.inject({ method: "PATCH", url: `/api/investigations/${invId}`, payload: { dismissedSuspects: ["not-a-sha"] } })).statusCode).toBe(400);
   });
 });

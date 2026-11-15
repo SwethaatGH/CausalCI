@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { buildDependencyGraph, isTestPath, selectTests } from "@causalci/analysis";
-import { DockerSandbox, LocalRunner, commitRange, huntCulprit, huntToMarkdown, loadCommit, loadSourceFiles, rankRange, resolveSha, type TestRunner } from "@causalci/runner";
+import { buildDependencyGraph, initPolyglot, isTestPath, selectTests } from "@causalci/analysis";
+import { DockerSandbox, LocalRunner, commitRange, huntCulprit, huntToMarkdown, loadCommit, loadConfigFiles, loadSourceFiles, rankRange, resolveSha, type TestRunner } from "@causalci/runner";
 
 const ref = z.string().regex(/^[\w./~^-]{1,200}$/).describe("A commit SHA, branch or ref such as HEAD~5");
 const repoArg = z.string().default(".").describe("Path to a local git clone");
@@ -42,8 +42,8 @@ server.registerTool(
   async ({ repo, sha }) => {
     const dir = resolve(repo);
     const full = await resolveSha(dir, sha);
-    const [commit, files] = await Promise.all([loadCommit(dir, full), loadSourceFiles(dir, full)]);
-    const { graph } = buildDependencyGraph(files, { headSha: full });
+    const [commit, files, configs] = await Promise.all([loadCommit(dir, full), loadSourceFiles(dir, full), loadConfigFiles(dir, full), initPolyglot()]);
+    const { graph } = buildDependencyGraph(files, { headSha: full, configs });
     const sel = selectTests(graph, { changedFiles: commit.files.map((f) => f.path), allTests: files.map((f) => f.path).filter(isTestPath) });
     return text([...sel.reasons, ...(sel.runAll ? ["Run the full suite."] : sel.selected.map((t) => `- ${t}`))].join("\n"), { ...sel });
   },

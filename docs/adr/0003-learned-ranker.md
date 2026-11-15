@@ -12,6 +12,6 @@ Train a logistic regression on the same signals plus churn, file count, recency 
 
 ## Consequences
 
-- Pooled top-3 accuracy rises to 64.5% (vs. 44.7% for the best baseline) on repositories the model never trained on.
+- Pooled top-3 accuracy rises to 65.8% (95% CI 58.7–72.8%) vs. 49.5% (42.4–56.5%) for the best baseline, across 184 regressions in 9 repositories and 3 languages, each scored by a model that never trained on that repository. (The first evaluation, on 76 cases from 3 JavaScript repositories, gave 64.5% vs. 44.7%.)
 - The model is plain numbers in source control: reviewable, diffable and reproducible from `causalci eval`.
 - Retraining on more repositories is one command. The evaluation harness is the regression test for ranking changes.

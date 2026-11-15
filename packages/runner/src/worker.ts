@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOk } from "./exec";
 import { huntCulprit, type HuntResult } from "./hunt";
-import type { BisectJob, JobQueue } from "./queue";
+import type { BisectJob, JobQueue, VerifyResult } from "./queue";
 import { DockerSandbox, KubernetesSandbox, type RunResult, type TestRunner } from "./sandbox";
 
 export interface WorkerHooks {
@@ -48,7 +48,7 @@ export function runnerFor(job: BisectJob, repoDir: string, o: WorkerOptions): Te
   return new DockerSandbox({ repo: repoDir, testCommand: job.input.testCommand, installCommand: job.input.installCommand, runtime: o.runtime, image: o.image, limits });
 }
 
-export async function processJob(job: BisectJob, o: WorkerOptions, hooks: WorkerHooks = {}): Promise<HuntResult> {
+export async function processJob(job: BisectJob, o: WorkerOptions, hooks: WorkerHooks = {}): Promise<HuntResult | VerifyResult> {
   const repoDir = await cachedClone(job.input.repoUrl, o.cacheDir ?? join(tmpdir(), "causalci-cache"));
   const base = runnerFor(job, repoDir, o);
   const runner: TestRunner = {
@@ -59,6 +59,10 @@ export async function processJob(job: BisectJob, o: WorkerOptions, hooks: Worker
       return r;
     },
   };
+  if (job.input.kind === "verify") {
+    const r = await runner.run(job.input.bad, { patch: job.input.patch });
+    return { kind: "verify", sha: r.sha, verdict: r.verdict, timedOut: r.timedOut, durationMs: r.durationMs, logTail: r.logTail };
+  }
   return huntCulprit({ repo: repoDir, good: job.input.good, bad: job.input.bad, runner, strategy: job.input.strategy, parallel: job.input.parallel });
 }
 
@@ -72,10 +76,16 @@ export async function workLoop(queue: JobQueue, o: WorkerOptions, signal: AbortS
     hooks.onJobStart?.(job);
     log("job started", { id: job.id, repo: job.input.repoUrl });
     try {
-      const { search, ...result } = await processJob(job, o, hooks);
-      await queue.complete(job.id, { ...result, posterior: search.posterior });
+      const out = await processJob(job, o, hooks);
+      if ("kind" in out && out.kind === "verify") {
+        await queue.complete(job.id, out);
+        log("job succeeded", { id: job.id, verify: out.verdict });
+      } else {
+        const { search, ...result } = out as HuntResult;
+        await queue.complete(job.id, { kind: "bisect", ...result, posterior: search.posterior });
+        log("job succeeded", { id: job.id, culprit: result.culprit.sha, runs: result.runs });
+      }
       hooks.onJobEnd?.(job, "succeeded", (Date.now() - started) / 1000);
-      log("job succeeded", { id: job.id, culprit: result.culprit.sha, runs: result.runs });
     } catch (err) {
       await queue.fail(job.id, (err as Error).message);
       hooks.onJobEnd?.(job, "failed", (Date.now() - started) / 1000);

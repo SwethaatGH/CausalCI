@@ -3,7 +3,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { DEFAULT_SCENARIOS, benchToMarkdown, buildDependencyGraph, isTestPath, runScenario, selectTests, suspectRangeFromSignal, type Deploy, type SeriesPoint } from "@causalci/analysis";
+import { DEFAULT_SCENARIOS, benchToMarkdown, buildDependencyGraph, initPolyglot, isTestPath, runScenario, selectTests, suspectRangeFromSignal, type Deploy, type SeriesPoint } from "@causalci/analysis";
 import {
   DockerSandbox,
   KubernetesSandbox,
@@ -17,6 +17,7 @@ import {
   huntCulprit,
   huntToMarkdown,
   loadCommit,
+  loadConfigFiles,
   loadSourceFiles,
   mineLabels,
   rankRange,
@@ -154,8 +155,8 @@ async function main() {
 
   if (cmd === "select-tests") {
     const sha = await resolveSha(repo, o.sha ?? o.bad!);
-    const [commit, files] = await Promise.all([loadCommit(repo, sha), loadSourceFiles(repo, sha)]);
-    const { graph } = buildDependencyGraph(files, { headSha: sha });
+    const [commit, files, configs] = await Promise.all([loadCommit(repo, sha), loadSourceFiles(repo, sha), loadConfigFiles(repo, sha), initPolyglot()]);
+    const { graph } = buildDependencyGraph(files, { headSha: sha, configs });
     const sel = selectTests(graph, { changedFiles: commit.files.map((f) => f.path), allTests: files.map((f) => f.path).filter(isTestPath) });
     return print([...sel.reasons, "", ...(sel.runAll ? ["(all tests)"] : sel.selected), "", `${sel.selected.length} selected, ${sel.skipped.length} skipped`].join("\n"), sel);
   }

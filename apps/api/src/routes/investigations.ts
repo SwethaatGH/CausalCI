@@ -6,7 +6,7 @@ import { compareSchema, createInvestigationSchema, fileContentsSchema, importRep
 import { computeBlastRadius, DEMO_SYMPTOMS, diffFunctions, diffPackageJson, isConfigPath, parseRepoInput } from "@causalci/analysis";
 import type { DB } from "../db";
 import { ApiError, notFound } from "../errors";
-import { cancelInvestigation, initialProgress, isRunning, progressBus, runInvestigation } from "../pipeline";
+import { cancelInvestigation, graphAtCommit, initialProgress, isRunning, progressBus, runInvestigation } from "../pipeline";
 import { DemoSource, sourceFor } from "../sources";
 
 export function newInvestigation(input: z.output<typeof createInvestigationSchema>, repo: { id: string; fullName: string; isDemo: boolean }): Investigation {
@@ -197,13 +197,26 @@ export function registerInvestigationRoutes(app: FastifyInstance, db: DB, opts: 
     if (!commit) throw new ApiError(404, "COMMIT_NOT_IN_INVESTIGATION", `Commit ${sha} is not part of this investigation.`);
     if (!a.graph) return { graph: null, blastRadius: { commitSha: commit.sha, seeds: [], modifiedFunctions: [], directDependents: [], affected: [], relatedTests: [], classification: "unknown", notes: ["Dependency graph unavailable for this investigation."] } };
     const assessment = a.assessments.find((x) => x.commitSha === commit.sha);
-    const blastRadius = computeBlastRadius(a.graph, {
+    // The graph as it was at this commit, so impact reflects the code that existed then.
+    let graph = a.graph;
+    let historical = false;
+    try {
+      const at = await graphAtCommit(db, inv, a, commit.sha);
+      if (at) {
+        historical = at.headSha !== a.graph.headSha;
+        graph = at;
+      }
+    } catch (err) {
+      req.log.warn({ err }, "historical graph failed; using head graph");
+    }
+    const blastRadius = computeBlastRadius(graph, {
       commitSha: commit.sha,
       changedFiles: commit.files.map((f) => f.path),
       modifiedFunctionIds: assessment?.modifiedFunctions.map((f) => f.id) ?? [],
     });
-    if (a.graph.headSha !== commit.sha) blastRadius.notes.push(`Graph reflects the latest analyzed commit (${a.graph.headSha?.slice(0, 7)}); relationships may differ at ${commit.shortSha}.`);
-    return { graph: a.graph, blastRadius };
+    if (historical) blastRadius.notes.push(`Relationships are read from the code as it was at ${commit.shortSha}.`);
+    else if (graph.headSha !== commit.sha) blastRadius.notes.push(`Graph reflects the latest analyzed commit (${graph.headSha?.slice(0, 7)}); relationships may differ at ${commit.shortSha}.`);
+    return { graph, blastRadius };
   });
 
   app.get<{ Params: { id: string } }>("/api/investigations/:id/health", async (req) => getAnalysis(req.params.id).health);

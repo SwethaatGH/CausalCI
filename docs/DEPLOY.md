@@ -36,6 +36,15 @@ curl -X POST localhost:8787/api/bisect-jobs -H 'content-type: application/json' 
 curl localhost:8787/api/bisect-jobs/<id>
 ```
 
+## Running tests from the web app
+
+With `BISECT_JOBS_ENABLED=true` and Docker running (or a worker with `REDIS_URL`), the web app can run a repository's own tests:
+
+- **Suspects → Confirm with tests**: pick the test command (a default is suggested from the main language) and a search: smart (flaky-aware), binary or parallel. The tests run in sandboxes across the investigation's range; the first failing commit becomes *confirmed by tests* and moves to the top.
+- **Fix and verify → Run the checks**: the proposed fix is applied to the newest commit and the tests run there; a passing run marks the fix verified.
+
+When test runs aren't available, both places say why (`GET /api/bisect-jobs/config`).
+
 ## CLI
 
 ```bash
@@ -97,7 +106,9 @@ Tools:
 
 | Variable | Used by | Purpose |
 |---|---|---|
-| `REDIS_URL` | API, worker | Job queue; in-memory when unset (single process) |
+| `IMPORT_MODE` | API | `auto` (default): read history from a local partial clone when git is available; `git`: always (fail if cloning fails); `api`: GitHub REST API only |
+| `CACHE_DIR` | API, worker | Repository mirrors and clone cache (default `./.causalci-cache`) |
+| `REDIS_URL` | API, worker | Job queue; in-memory when unset (single process, and the API then runs the worker itself) |
 | `BISECT_JOBS_ENABLED` | API | Allow creating sandboxed jobs (default off; forced off by `PUBLIC_DEMO`) |
 | `JOBS_TOKEN` | API | Bearer token required to create jobs |
 | `INLINE_WORKER` | API | Run the worker loop inside the API (single node with Docker) |

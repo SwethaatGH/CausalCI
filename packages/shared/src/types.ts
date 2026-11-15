@@ -273,6 +273,10 @@ export interface Investigation {
   progress: InvestigationProgress;
   error: string | null;
   reportIds: string[];
+  /** Commits the user marked "not the cause"; kept out of the suspect list but restorable. */
+  dismissedSuspects?: string[];
+  /** Latest sandboxed test job started for this investigation, if any. */
+  testJobId?: string | null;
 }
 
 export interface CommitTestResult {

@@ -187,7 +187,7 @@ export function verifyPatch(db: DB, investigationId: string, patchId: string): {
   const { inv, analysis, repo } = loadInvestigationBundle(db, investigationId);
   const patch = db.getPatch(patchId);
   if (!patch) throw notFound("Patch");
-  if (!repo.isDemo) throw new ApiError(422, "VERIFICATION_UNSUPPORTED", "Automated verification is only available for the controlled demo repository. CausalCI never executes imported repository code.");
+  if (!repo.isDemo) throw new ApiError(422, "USE_SANDBOX", "Real repositories are checked in a sandbox: use “Run the checks”, which runs your tests with the fix applied (needs BISECT_JOBS_ENABLED and Docker).");
   if (!patch.patchValid) throw new ApiError(422, "INVALID_PATCH", `Patch is not well-formed: ${patch.patchError}`);
   const head = analysis.commits[0];
   const snapshot = { ...(buildDemoHistory().snapshots.get(head.sha) ?? {}) };

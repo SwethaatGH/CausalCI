@@ -39,6 +39,10 @@ export const env = {
   jobsToken: process.env.JOBS_TOKEN || null,
   /** Run the job worker inside the API process (single-node setups; needs Docker on this host). */
   inlineWorker: process.env.INLINE_WORKER === "true",
+  /** How GitHub history is read: "git" (local partial clone: no rate limit, no truncation), "api", or "auto" (git when available). */
+  importMode: (["git", "api"].includes(process.env.IMPORT_MODE ?? "") ? process.env.IMPORT_MODE : "auto") as "git" | "api" | "auto",
+  /** Where repository mirrors are kept. */
+  cacheDir: process.env.CACHE_DIR ? resolve(REPO_ROOT, process.env.CACHE_DIR) : resolve(REPO_ROOT, ".causalci-cache"),
 };
 
 export const defaultSettings: RuntimeSettings = {

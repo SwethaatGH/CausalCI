@@ -9,6 +9,7 @@ import { api, downloadText } from "../lib/api";
 import { qk, usePatches, useTimeline } from "../lib/queries";
 import { cn, firstLine, languageForPath } from "../lib/utils";
 import { Badge, Button, CopyButton, EmptyState, ErrorState, Modal, PageTitle, Panel, PanelHeader, Select, SimulatedBanner, Skeleton } from "../components/ui";
+import { VerifyInSandbox } from "../components/testing";
 import { InvestigationGate, MiniDiff, useActiveInvestigation } from "../components/investigation";
 
 const STRATEGIES = [
@@ -167,9 +168,12 @@ function PatchDetail({ inv, patch, onVerify, verifying, result }: { inv: Investi
         }
       />
       <div className="space-y-4 p-4 text-sm">
-        {!patch.verified && (
-          <p className="flex items-center gap-1.5 text-xs text-warn"><AlertTriangle className="h-3.5 w-3.5" /> UNVERIFIED — this patch has not been shown to work.</p>
+        {patch.verified ? (
+          <p className="flex items-center gap-1.5 text-xs text-healthy"><CheckCircle2 className="h-3.5 w-3.5" /> Verified: the tests pass with this fix applied.</p>
+        ) : (
+          <p className="flex items-center gap-1.5 text-xs text-warn"><AlertTriangle className="h-3.5 w-3.5" /> Unverified: this fix hasn’t been shown to work yet.</p>
         )}
+        {!inv.isDemo && <VerifyInSandbox inv={inv} patch={patch} />}
         <p className="text-ink">{patch.description}</p>
         <div className="grid gap-3 md:grid-cols-2">
           <Info title="Rationale">{patch.rationale}</Info>
@@ -177,7 +181,7 @@ function PatchDetail({ inv, patch, onVerify, verifying, result }: { inv: Investi
           <Info title="Potential risks">{patch.risks.length ? <ul className="list-disc pl-4">{patch.risks.map((r) => <li key={r}>{r}</li>)}</ul> : "None stated"}</Info>
           <Info title="Verification requirements">{patch.verification.length ? <ul className="list-disc pl-4">{patch.verification.map((r) => <li key={r}>{r}</li>)}</ul> : "—"}</Info>
         </div>
-        <div className="text-xs text-ink-2">Target files: {patch.targetFiles.map((f) => <code key={f} className="mr-1.5 font-mono text-cyan">{f}</code>)}</div>
+        <div className="text-xs text-ink-2">Target files: {patch.targetFiles.map((f) => <code key={f} className="mr-1.5 font-mono text-ink">{f}</code>)}</div>
         {result && (
           <div className={cn("rounded-lg border p-3", result.results.every((r) => r.passed) ? "border-healthy/40 bg-healthy/[0.06]" : "border-crit/40 bg-crit/[0.06]")}>
             <div className="mb-1 text-sm font-medium text-ink">{result.summary}</div>

@@ -32,3 +32,6 @@ context.txt
 *.causalci-labels.json
 *.log
 .DS_Store
+
+# Local repository mirrors
+.causalci-cache/

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, CheckCircle2, FlaskConical, GitCompare, Info, ListChecks, Network, ShieldCheck, Siren, TestTube2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import type { Investigation } from "@causalci/shared";
@@ -12,6 +12,7 @@ import { Badge, Button, DetectionBadge, EmptyState, FindingBadge, PageTitle, Pan
 import { EvidenceList, InvestigationGate, SignalList, useActiveInvestigation } from "../components/investigation";
 import { SIGNAL_LABELS } from "../components/signal-labels";
 import { AnalysisCard } from "./Gemma";
+import { ConfirmWithTests } from "../components/testing";
 
 export default function Breakage() {
   return (
@@ -29,7 +30,15 @@ function BreakageView({ inv }: { inv: Investigation }) {
   const qc = useQueryClient();
   const level = useUI((s) => s.level);
 
-  const focus = inv.findings.find((f) => commitSha && f.commitSha.startsWith(commitSha)) ?? inv.findings[0];
+  const dismissed = new Set(inv.dismissedSuspects ?? []);
+  const visible = inv.findings.filter((f) => !dismissed.has(f.commitSha));
+  const repo = useQuery({ queryKey: ["repo", inv.repositoryId], queryFn: () => api.repository(inv.repositoryId) });
+  const setDismissed = useMutation({
+    mutationFn: (list: string[]) => api.updateInvestigation(inv.id, { dismissedSuspects: list }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.investigation(inv.id) }),
+    onError: (e) => toast.error("Couldn’t update suspects", { description: (e as Error).message }),
+  });
+  const focus = visible.find((f) => commitSha && f.commitSha.startsWith(commitSha)) ?? visible[0] ?? inv.findings[0];
   const commit = focus ? tl.data?.commits.find((c) => c.sha === focus.commitSha) : undefined;
   const assessment = focus ? tl.data?.assessments.find((a) => a.commitSha === focus.commitSha) : undefined;
   const diagnosis = useMemo(() => (ai.data ?? []).find((a) => a.commitSha === focus?.commitSha && (a.task === "root-cause" || a.task === "commit-investigation")), [ai.data, focus]);
@@ -122,7 +131,7 @@ function BreakageView({ inv }: { inv: Investigation }) {
           <Panel>
             <PanelHeader title="All suspects" subtitle="Top 5, highest risk first" icon={<Siren className="h-4 w-4" />} />
             <ol className="divide-y divide-line">
-              {inv.findings.map((f) => {
+              {visible.map((f) => {
                 const c = tl.data?.commits.find((x) => x.sha === f.commitSha);
                 const active = f.commitSha === focus?.commitSha;
                 return (
@@ -143,17 +152,27 @@ function BreakageView({ inv }: { inv: Investigation }) {
                       <Button size="sm" variant="ghost" disabled={!c?.parents[0]} onClick={() => go("/divergence", { a: c?.parents[0] ?? null, b: f.commitSha, commit: f.commitSha })}>Diff</Button>
                       <Button size="sm" variant="ghost" onClick={() => go("/infection", { commit: f.commitSha })}>Impact</Button>
                       <Button size="sm" variant="ghost" onClick={() => go("/gemma", { commit: f.commitSha })}>Ask AI</Button>
+                      <Button size="sm" variant="ghost" className="ml-auto" title="Hide this suspect. You can bring it back later." onClick={() => setDismissed.mutate([...dismissed, f.commitSha])}>
+                        Not the cause
+                      </Button>
                     </div>
                   </li>
                 );
               })}
             </ol>
+            {dismissed.size > 0 && (
+              <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-[13px] text-ink-3">
+                <span>{dismissed.size} marked as not the cause</span>
+                <Button size="sm" variant="ghost" onClick={() => setDismissed.mutate([])}>Restore</Button>
+              </div>
+            )}
           </Panel>
 
           {/* Verification */}
           <Panel>
-            <PanelHeader title="Test results" subtitle={inv.isDemo ? "Checks run on the demo only" : "The web app never runs your repository’s code"} icon={<ShieldCheck className="h-4 w-4" />} />
-            <div className="p-4">
+            <PanelHeader title="Test results" subtitle={inv.isDemo ? "The demo’s built-in checks" : "Your tests, run in isolated sandboxes"} icon={<ShieldCheck className="h-4 w-4" />} />
+            <div className="space-y-4 p-4">
+              {!inv.isDemo && <ConfirmWithTests inv={inv} language={repo.data?.primaryLanguage} />}
               {bisect ? (
                 <div className="space-y-3">
                   <p className="text-sm text-ink-2">

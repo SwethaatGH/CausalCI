@@ -18,3 +18,5 @@ export * from "./testselect";
 export * from "./changepoint";
 export * from "./learn";
 export * from "./ranker-model";
+export * from "./semantic";
+export * from "./polyglot";

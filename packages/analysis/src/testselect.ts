@@ -1,6 +1,7 @@
 import type { DependencyGraph } from "@causalci/shared";
 import { isJsTs, isTestPath } from "./classify";
 import { computeBlastRadius, fileNodeId } from "./graph";
+import { polyglotLanguage } from "./polyglot";
 
 export interface TestSelection {
   /** Test files to run. Equals `allTests` when `runAll` is true. */
@@ -24,7 +25,8 @@ export function selectTests(
   const known = new Set(graph.nodes.map((n) => n.id));
   const reasons: string[] = [];
 
-  const opaque = input.changedFiles.filter((f) => !isTestPath(f) && (!isJsTs(f) || !known.has(fileNodeId(f))));
+  const traceable = (f: string) => (isJsTs(f) || !!polyglotLanguage(f)) && known.has(fileNodeId(f));
+  const opaque = input.changedFiles.filter((f) => !isTestPath(f) && !traceable(f));
   if (opaque.length) {
     reasons.push(`Changed files the graph cannot trace (${opaque.slice(0, 5).join(", ")}${opaque.length > 5 ? ", …" : ""}); running the full suite.`);
     return { selected: all, skipped: [], runAll: true, reasons };

@@ -79,6 +79,35 @@ export interface SearchResults {
   findings: { investigationId: string; commitSha: string; title: string; score: number }[];
 }
 
+export interface JobsConfig {
+  enabled: boolean;
+  reason: string | null;
+  executor?: "queue" | "inline";
+}
+
+export interface TestRun {
+  sha: string;
+  verdict: "pass" | "fail";
+  timedOut: boolean;
+  durationMs: number;
+  logTail: string;
+}
+
+/** A sandboxed test job (culprit search or fix verification), as the API reports it. */
+export interface TestJob {
+  id: string;
+  state: "queued" | "running" | "succeeded" | "failed";
+  input: { kind?: "bisect" | "verify"; good: string; bad: string; testCommand: string; strategy?: string };
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  result:
+    | null
+    | ({ kind: "verify" } & TestRun)
+    | { kind: "bisect"; culprit: { sha: string; shortSha: string; title: string }; confidence: number; runs: number; rounds: number; heuristicRank: number; testRuns: (TestRun & { index: number })[] };
+}
+
 export const api = {
   ping: () => request<{ ok: boolean }>("/api/health"),
   aiStatus: (refresh = false) => request<AIStatus>(`/api/ai/status${refresh ? "?refresh=1" : ""}`),
@@ -96,7 +125,7 @@ export const api = {
   investigations: () => request<Investigation[]>("/api/investigations"),
   investigation: (id: string) => request<Investigation>(`/api/investigations/${id}`),
   createInvestigation: (input: CreateInvestigationInput) => post<Investigation>("/api/investigations", input),
-  updateInvestigation: (id: string, patch: Partial<Pick<Investigation, "name" | "selectedCommitSha" | "knownGoodSha" | "knownBadSha" | "bookmarks" | "notes">>) =>
+  updateInvestigation: (id: string, patch: Partial<Pick<Investigation, "name" | "selectedCommitSha" | "knownGoodSha" | "knownBadSha" | "bookmarks" | "notes" | "dismissedSuspects">>) =>
     request<Investigation>(`/api/investigations/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteInvestigation: (id: string) => request<void>(`/api/investigations/${id}`, { method: "DELETE" }),
   duplicateInvestigation: (id: string) => post<Investigation>(`/api/investigations/${id}/duplicate`),
@@ -116,6 +145,10 @@ export const api = {
   aiFix: (body: { investigationId: string; commitSha: string; strategy: PatchSuggestion["strategy"] }) => post<PatchSuggestion>("/api/ai/fix", body),
   patches: (id: string) => request<PatchSuggestion[]>(`/api/investigations/${id}/patches`),
   verifyPatch: (id: string, patchId: string) => post<{ patch: PatchSuggestion; result: VerificationResult }>(`/api/investigations/${id}/patches/${patchId}/verify`),
+  jobsConfig: () => request<JobsConfig>("/api/bisect-jobs/config"),
+  testJob: (jobId: string) => request<TestJob>(`/api/bisect-jobs/${jobId}`),
+  confirmWithTests: (id: string, body: { testCommand: string; installCommand?: string; strategy: "binary" | "k-ary" | "bayesian"; parallel: number }) => post<TestJob>(`/api/investigations/${id}/confirm`, body),
+  verifyInSandbox: (id: string, patchId: string, body: { testCommand: string; installCommand?: string }) => post<TestJob>(`/api/investigations/${id}/patches/${patchId}/verify-in-sandbox`, body),
 
   reports: (investigationId?: string) => request<InvestigationReport[]>(`/api/reports${investigationId ? `?investigationId=${investigationId}` : ""}`),
   report: (id: string) => request<InvestigationReport>(`/api/reports/${id}`),

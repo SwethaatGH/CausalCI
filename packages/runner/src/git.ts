@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChangedFile, Commit, FileStatus } from "@causalci/shared";
-import { isJsTs } from "@causalci/analysis";
+import { isGraphConfigPath, isJsTs, polyglotLanguage } from "@causalci/analysis";
 import { runOk } from "./exec";
 
 const SHA_RE = /^[0-9a-f]{4,40}$/i;
@@ -91,7 +91,7 @@ export async function loadCommit(repo: string, sha: string): Promise<Commit> {
   };
 }
 
-/** JS/TS source files at a commit, for the dependency graph and AST analysis. */
+/** Source files at a commit in every language CausalCI analyzes (JS/TS, Python, Go, Java). */
 export async function loadSourceFiles(repo: string, sha: string, opts: { maxFiles?: number; maxBytes?: number } = {}): Promise<{ path: string; content: string }[]> {
   const maxFiles = opts.maxFiles ?? 400;
   const maxBytes = opts.maxBytes ?? 300_000;
@@ -99,7 +99,7 @@ export async function loadSourceFiles(repo: string, sha: string, opts: { maxFile
   const paths = listing
     .split("\n")
     .map((l) => /^\d+ blob [0-9a-f]+\s+(\d+|-)\t(.+)$/.exec(l))
-    .filter((m): m is RegExpExecArray => !!m && m[1] !== "-" && Number(m[1]) <= maxBytes && isJsTs(m[2]) && !m[2].includes("node_modules/"))
+    .filter((m): m is RegExpExecArray => !!m && m[1] !== "-" && Number(m[1]) <= maxBytes && (isJsTs(m[2]) || !!polyglotLanguage(m[2])) && !m[2].includes("node_modules/"))
     .map((m) => m[2])
     .slice(0, maxFiles);
   const out: { path: string; content: string }[] = [];
@@ -134,4 +134,13 @@ export async function checkoutWorktree(repo: string, sha: string): Promise<{ dir
       await rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+/** tsconfig/jsconfig, package.json and go.mod files at a commit: what the resolvers need for aliases, workspaces and Go modules. */
+export async function loadConfigFiles(repo: string, sha: string): Promise<{ path: string; content: string }[]> {
+  const listing = await git(repo, ["ls-tree", "-r", "--name-only", assertRef(sha, "sha")]);
+  const paths = listing.split("\n").filter((p) => p && isGraphConfigPath(p)).slice(0, 60);
+  const out: { path: string; content: string }[] = [];
+  for (const p of paths) out.push({ path: p, content: await git(repo, ["show", `${sha}:${p}`]) });
+  return out;
 }

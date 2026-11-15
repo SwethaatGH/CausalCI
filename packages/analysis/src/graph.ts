@@ -7,6 +7,8 @@ import type {
   EvidenceReference,
 } from "@causalci/shared";
 import { parseModule, type ParsedModule } from "./ast";
+import { parsePolyglot, polyglotEdges, polyglotLanguage, polyglotStatus, type PolyParsed } from "./polyglot";
+import { semanticJsEdges } from "./semantic";
 import { isJsTs, isTestPath, languageOf, moduleOf } from "./classify";
 
 export interface SourceFile {
@@ -88,11 +90,17 @@ export interface BuiltGraph {
 
 /**
  * Builds a dependency graph from real source contents.
- * - JS/TS: AST-derived imports, functions and identifier calls (function-level).
- * - Python: regex-detected imports (file-level, labeled heuristic).
+ * - JS/TS: functions from the compiler AST; imports and calls resolved by the TypeScript type checker
+ *   (path aliases, workspace packages, method calls, callbacks, interface dispatch), with a
+ *   syntactic fallback.
+ * - Python, Go, Java: functions, imports and calls from tree-sitter grammars once `initPolyglot()`
+ *   has run; otherwise Python falls back to regex-detected file imports.
  * - Other languages: file nodes only — no relationships are invented.
  */
-export function buildDependencyGraph(files: SourceFile[], opts: { headSha: string | null; skipped?: { path: string; reason: string }[] }): BuiltGraph {
+export function buildDependencyGraph(
+  files: SourceFile[],
+  opts: { headSha: string | null; skipped?: { path: string; reason: string }[]; configs?: SourceFile[]; semantic?: boolean },
+): BuiltGraph {
   const known = new Set(files.map((f) => f.path));
   const nodes = new Map<string, DependencyNode>();
   const edges = new Map<string, DependencyEdge>();
@@ -152,9 +160,43 @@ export function buildDependencyGraph(files: SourceFile[], opts: { headSha: strin
     }
   }
 
+  // Pass 1b: Python, Go and Java functions via tree-sitter.
+  const poly = new Map<string, PolyParsed>();
+  for (const f of files) {
+    if (!polyglotLanguage(f.path) || !f.content) continue;
+    const pm = parsePolyglot(f.path, f.content);
+    if (!pm) continue;
+    poly.set(f.path, pm);
+    if (pm.parseError && pm.functions.length === 0) skipped.push({ path: f.path, reason: pm.parseError });
+    for (const fn of pm.functions) {
+      const id = fnNodeId(fn.id);
+      nodes.set(id, { id, kind: fn.kind === "class" ? "class" : "function", label: fn.name, filePath: f.path, module: moduleOf(f.path), language: languageOf(f.path), parentId: fileNodeId(f.path), isTest: isTestPath(f.path) });
+      addEdge(fileNodeId(f.path), id, "contains", { kind: "ast", filePath: f.path, line: fn.startLine, snippet: null, description: `${fn.kind} ${fn.name} declared at ${f.path}:${fn.startLine}` });
+    }
+  }
+
+  // Type-aware JS/TS resolution; falls back to the syntactic resolver below if it cannot run.
+  const VIA: Record<string, string> = { import: "imports", call: "calls", "method-call": "calls method", callback: "passes as a callback", dispatch: "may dispatch to (interface or override)", constructor: "constructs" };
+  const semantic = opts.semantic === false ? null : semanticJsEdges(files.filter((f) => isJsTs(f.path)), opts.configs ?? []);
+  const semanticOk = !!semantic && !semantic.notes.some((n) => n.startsWith("Type-aware resolution failed"));
+  if (semantic) limitations.push(...semantic.notes);
+  if (semanticOk) {
+    for (const e of semantic!.edges) {
+      if (!nodes.has(e.source) || !nodes.has(e.target)) continue;
+      addEdge(e.source, e.target, e.kind, {
+        kind: e.kind === "import" ? "import" : "ast",
+        filePath: e.filePath,
+        line: e.line,
+        snippet: e.snippet,
+        description: `${e.source.replace(/^(fn|file):/, "").split("#").pop()} ${VIA[e.via]} ${e.target.replace(/^(fn|file):/, "").split("#").pop()} at ${e.filePath}:${e.line} (type-checked)`,
+      });
+    }
+  }
+
   // Pass 2: imports and calls.
   for (const f of files) {
     if (isJsTs(f.path)) {
+      if (semanticOk) continue;
       const pm = parsed.get(f.path);
       if (!pm) continue;
       const localToTarget = new Map<string, { file: string; imported: string }>();
@@ -204,6 +246,8 @@ export function buildDependencyGraph(files: SourceFile[], opts: { headSha: strin
           });
         }
       }
+    } else if (poly.has(f.path)) {
+      continue; // edges added below from the tree-sitter resolver
     } else if (/\.py$/i.test(f.path)) {
       for (const imp of pythonImports(f.path, f.content, known)) {
         addEdge(fileNodeId(f.path), fileNodeId(imp.target), "import", {
@@ -214,15 +258,31 @@ export function buildDependencyGraph(files: SourceFile[], opts: { headSha: strin
           description: `Heuristic (regex) import detected at ${f.path}:${imp.line}`,
         });
       }
-    } else {
+    } else if (!polyglotLanguage(f.path)) {
       hasOtherLang = true;
     }
   }
 
-  const hasPython = files.some((f) => /\.py$/i.test(f.path));
-  limitations.push("Only relative JS/TS imports are resolved; package imports and path aliases are not graphed.");
-  limitations.push("Call edges cover direct identifier calls to known functions; dynamic dispatch, callbacks and method calls on instances are not detected.");
-  if (hasPython) limitations.push("Python imports are detected with regular expressions (heuristic) at file level.");
+  for (const e of polyglotEdges(poly, known, opts.configs ?? [])) {
+    if (!nodes.has(e.source) || !nodes.has(e.target)) continue;
+    addEdge(e.source, e.target, e.kind, {
+      kind: e.kind === "import" ? "import" : "ast",
+      filePath: e.filePath,
+      line: e.line,
+      snippet: e.snippet,
+      description:
+        e.confidence === "name-match"
+          ? `${e.snippet} matched by method name only (unique among visible code) at ${e.filePath}:${e.line}`
+          : `${e.snippet} at ${e.filePath}:${e.line} (tree-sitter)`,
+    });
+  }
+
+  const hasJs = files.some((f) => isJsTs(f.path));
+  if (hasJs && !semanticOk) limitations.push("JS/TS relationships use syntactic resolution: relative imports and direct calls only.");
+  if (hasJs && semanticOk) limitations.push("JS/TS calls are resolved by the TypeScript type checker; calls through `any`, dynamic `obj[name]()` or values from packages outside the repository cannot be followed.");
+  const polyMissing = files.some((f) => polyglotLanguage(f.path)) && !polyglotStatus().ready;
+  if (polyMissing) limitations.push("Python/Go/Java grammars are not loaded in this process; Python imports fall back to regular expressions and Go/Java files have no edges.");
+  if (poly.size) limitations.push("Python, Go and Java calls on untyped instances are linked only when the method name is unique among visible code (labeled name match).");
   if (hasOtherLang) limitations.push("Files in other languages are shown without relationships; no edges are inferred.");
 
   const hasFunctions = [...nodes.values()].some((n) => n.kind !== "file");
