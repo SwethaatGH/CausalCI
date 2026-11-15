@@ -1,24 +1,24 @@
-# Render Blueprint: one free web service running the Fastify API, which also serves the built web app.
+# Render Blueprint: one free web service running the prebuilt image (API + built web app on one port).
+# The image is built and published by .github/workflows/deploy.yml, because building the web app needs
+# about 1 GB of memory and a free Render instance has 512 MB. Render only pulls and runs it.
 # Free instances sleep when idle and have no persistent disk, so saved investigations reset on restart;
 # the built-in demo needs neither GitHub nor Gemma and always works.
 services:
   - type: web
     name: causalci
-    runtime: node
+    runtime: image
+    image:
+      url: ghcr.io/swethaatgh/causalci-api:latest
     plan: free
-    buildCommand: npm ci && npm run build
-    # The heap cap applies only to the running server (free instances have 512 MB); the build needs more.
-    startCommand: NODE_OPTIONS=--max-old-space-size=384 npm start
     healthCheckPath: /api/health
     envVars:
-      - key: NODE_VERSION
-        value: "22"
-      - key: HOST
-        value: 0.0.0.0
-      - key: WEB_DIST_PATH
-        value: apps/web/dist
+      - key: PORT
+        value: "8787"
       - key: PUBLIC_DEMO
         value: "true"
+      # Keeps the server's heap inside a free instance's 512 MB.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       # No GEMINI_API_KEY: the demo uses its labeled PRERECORDED analysis.
       - key: AI_PROVIDER
         value: gemini
